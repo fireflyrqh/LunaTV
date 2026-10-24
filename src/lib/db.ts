@@ -85,7 +85,17 @@ function createStorage(): IStorage {
       return new TursoD1Storage(tursoAdapter);
     case 'localstorage':
     default:
-      return null as unknown as IStorage;
+      return new Proxy({} as any, {
+        get(target, prop) {
+          if (prop === 'then') return undefined;
+          return async (...args: any[]) => {
+            if (typeof prop === 'string' && (prop.startsWith('getAll') || prop.endsWith('List') || prop.endsWith('s'))) {
+              return prop.includes('Records') || prop.includes('Favorites') ? {} : [];
+            }
+            return null;
+          };
+        },
+      }) as IStorage;
   }
 }
 
@@ -211,7 +221,12 @@ export class DbManager {
   private storage: IStorage;
 
   constructor() {
-    this.storage = getStorage();
+    this.storage = getStorage() || (new Proxy({} as any, {
+      get(target, prop) {
+        if (prop === 'then') return undefined;
+        return async (...args: any[]) => null;
+      },
+    }) as IStorage);
   }
 
   // 播放记录相关方法

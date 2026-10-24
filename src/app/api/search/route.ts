@@ -18,10 +18,11 @@ import { yellowWords } from '@/lib/yellow';
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
-  const authInfo = getAuthInfoFromCookie(request);
-  if (!authInfo || !authInfo.username) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const authCookie = getAuthInfoFromCookie(request);
+  const authInfo = {
+    username: authCookie?.username || 'default',
+    role: authCookie?.role || 'guest',
+  };
 
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');

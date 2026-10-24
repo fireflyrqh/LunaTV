@@ -1,42 +1,33 @@
 import { NextResponse } from 'next/server';
 
-import { getCacheTime } from '@/lib/config';
-
-export const runtime = 'nodejs';
+import { fetchBangumiFromServer } from '@/lib/bangumi.server';
+import { getConfig } from '@/lib/config';
 
 export async function GET() {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-
   try {
-    const response = await fetch('https://api.bgm.tv/calendar', {
-      signal: controller.signal,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        Accept: 'application/json',
-      },
+    const config = await getConfig();
+    const response = await fetchBangumiFromServer('/calendar', {
+      baseUrl: config.SiteConfig.BangumiApiBaseUrl,
+      proxy: config.SiteConfig.BangumiProxy,
     });
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
+      return NextResponse.json(
+        { error: `Bangumi calendar 请求失败: ${response.status}` },
+        { status: response.status || 502 }
+      );
     }
 
     const data = await response.json();
-    const cacheTime = await getCacheTime();
-
     return NextResponse.json(data, {
       headers: {
-        'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,
-        'CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-        'Vercel-CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
+        'Cache-Control': 'public, max-age=3600, stale-while-revalidate=21600',
       },
     });
   } catch (error) {
-    clearTimeout(timeoutId);
+    console.error('获取 Bangumi calendar 失败:', error);
     return NextResponse.json(
-      { error: '获取番剧日历失败', details: (error as Error).message },
+      { error: '获取 Bangumi calendar 失败' },
       { status: 500 }
     );
   }

@@ -1,50 +1,76 @@
 /* eslint-disable no-console */
 'use client';
 
+import { AlertTriangle, ChevronRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { PlayRecord } from '@/lib/db.client';
 import {
   clearAllPlayRecords,
+  getCachedPlayRecordsSnapshot,
   getAllPlayRecords,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 
-import ScrollableRow from '@/components/ScrollableRow';
+import PlayRecordsPanel from '@/components/PlayRecordsPanel';
 import VideoCard from '@/components/VideoCard';
+import VirtualScrollableRow from '@/components/VirtualScrollableRow';
 
 interface ContinueWatchingProps {
   className?: string;
 }
 
-export default function ContinueWatching({ className }: ContinueWatchingProps) {
-  const [playRecords, setPlayRecords] = useState<
-    (PlayRecord & { key: string })[]
-  >([]);
-  const [loading, setLoading] = useState(true);
+type PlayRecordItem = PlayRecord & { key: string };
 
-  // 处理播放记录数据更新的函数
-  const updatePlayRecords = (allRecords: Record<string, PlayRecord>) => {
-    // 将记录转换为数组并根据 save_time 由近到远排序
+export default function ContinueWatching({ className }: ContinueWatchingProps) {
+  const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
+  const cachedDisplayLimit = storageType !== 'localstorage' ? 10 : undefined;
+  const [playRecords, setPlayRecords] = useState<PlayRecordItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [showPlayRecordsPanel, setShowPlayRecordsPanel] = useState(false);
+
+  const updatePlayRecords = (
+    allRecords: Record<string, PlayRecord>,
+    limit?: number
+  ) => {
     const recordsArray = Object.entries(allRecords).map(([key, record]) => ({
       ...record,
       key,
     }));
 
-    // 按 save_time 降序排序（最新的在前面）
-    const sortedRecords = recordsArray.sort(
-      (a, b) => b.save_time - a.save_time
-    );
+    const sortedRecords = recordsArray.sort((a, b) => b.save_time - a.save_time);
+    setPlayRecords(limit ? sortedRecords.slice(0, limit) : sortedRecords);
+  };
 
-    setPlayRecords(sortedRecords);
+  const applyCachedSnapshot = () => {
+    const cachedRecords = getCachedPlayRecordsSnapshot();
+    if (Object.keys(cachedRecords).length === 0) {
+      return false;
+    }
+
+    updatePlayRecords(cachedRecords, cachedDisplayLimit);
+    setLoading(false);
+    return true;
   };
 
   useEffect(() => {
+    const unsubscribe = subscribeToDataUpdates(
+      'playRecordsUpdated',
+      (newRecords: Record<string, PlayRecord>) => {
+        updatePlayRecords(newRecords);
+        setLoading(false);
+      }
+    );
+
     const fetchPlayRecords = async () => {
       try {
-        setLoading(true);
+        const hasCachedSnapshot = applyCachedSnapshot();
+        if (!hasCachedSnapshot) {
+          setLoading(true);
+        }
 
-        // 从缓存或API获取所有播放记录
         const allRecords = await getAllPlayRecords();
         updatePlayRecords(allRecords);
       } catch (error) {
@@ -56,99 +82,219 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
     };
 
     fetchPlayRecords();
-
-    // 监听播放记录更新事件
-    const unsubscribe = subscribeToDataUpdates(
-      'playRecordsUpdated',
-      (newRecords: Record<string, PlayRecord>) => {
-        updatePlayRecords(newRecords);
-      }
-    );
-
     return unsubscribe;
-  }, []);
+  }, [cachedDisplayLimit]);
 
-  // 如果没有播放记录，则不渲染组件
   if (!loading && playRecords.length === 0) {
     return null;
   }
 
-  // 计算播放进度百分比
   const getProgress = (record: PlayRecord) => {
     if (record.total_time === 0) return 0;
     return (record.play_time / record.total_time) * 100;
   };
 
-  // 从 key 中解析 source 和 id
   const parseKey = (key: string) => {
     const [source, id] = key.split('+');
     return { source, id };
   };
 
+  const handleClearConfirm = async () => {
+    await clearAllPlayRecords();
+    setPlayRecords([]);
+    setShowConfirmDialog(false);
+  };
+
   return (
-    <section className={`mb-8 ${className || ''}`}>
-      <div className='mb-4 flex items-center justify-between'>
-        <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-          继续观看
-        </h2>
-        {!loading && playRecords.length > 0 && (
-          <button
-            className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-            onClick={async () => {
-              await clearAllPlayRecords();
-              setPlayRecords([]);
-            }}
-          >
-            清空
-          </button>
-        )}
-      </div>
-      <ScrollableRow>
-        {loading
-          ? // 加载状态显示灰色占位数据
-            Array.from({ length: 6 }).map((_, index) => (
+    <>
+      <section className={`mb-8 ${className || ''}`}>
+        <div className='mb-4 flex items-center justify-between'>
+          <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+            继续观看
+          </h2>
+          {!loading && playRecords.length > 0 && (
+            <div className='flex items-center gap-1'>
+              <button
+                className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                onClick={() => setShowConfirmDialog(true)}
+              >
+                清空
+              </button>
+              <button
+                className='inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200'
+                onClick={() => setShowPlayRecordsPanel(true)}
+                aria-label='查看全部播放记录'
+              >
+                <ChevronRight className='h-4 w-4' />
+              </button>
+            </div>
+          )}
+        </div>
+        {loading ? (
+          <div className='flex gap-2 overflow-x-auto scrollbar-hide pb-2 pt-2'>
+            {Array.from({ length: 8 }).map((_, index) => (
               <div
                 key={index}
-                className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                className='min-w-[180px] w-48 sm:min-w-[200px] sm:w-52'
               >
-                <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
-                  <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
+                <div className='relative aspect-[3/2] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
+                  <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700' />
                 </div>
-                <div className='mt-2 h-4 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
-                <div className='mt-1 h-3 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
+                <div className='mt-1 h-1 rounded bg-gray-200 animate-pulse dark:bg-gray-800' />
+                <div className='mt-2 h-4 w-3/4 rounded bg-gray-200 animate-pulse dark:bg-gray-800' />
               </div>
-            ))
-          : // 显示真实数据
-            playRecords.map((record) => {
-              const { source, id } = parseKey(record.key);
-              return (
-                <div
-                  key={record.key}
-                  className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
-                >
-                  <VideoCard
-                    id={id}
-                    title={record.title}
-                    poster={record.cover}
-                    year={record.year}
-                    source={source}
-                    source_name={record.source_name}
-                    progress={getProgress(record)}
-                    episodes={record.total_episodes}
-                    currentEpisode={record.index}
-                    query={record.search_title}
-                    from='playrecord'
-                    onDelete={() =>
-                      setPlayRecords((prev) =>
-                        prev.filter((r) => r.key !== record.key)
-                      )
-                    }
-                    type={record.total_episodes > 1 ? 'tv' : ''}
-                  />
+            ))}
+          </div>
+        ) : (
+          <div>
+            <VirtualScrollableRow>
+              {playRecords.map((record) => {
+                const { source, id } = parseKey(record.key);
+                return (
+                  <div
+                    key={record.key}
+                    className='min-w-[180px] w-48 sm:min-w-[200px] sm:w-52'
+                    style={{ position: 'relative' }}
+                  >
+                    <VideoCard
+                      id={id}
+                      title={record.title}
+                      poster={record.cover}
+                      year={record.year}
+                      source={source}
+                      source_name={record.source_name}
+                      progress={getProgress(record)}
+                      episodes={record.total_episodes}
+                      currentEpisode={record.index}
+                      query={record.search_title}
+                      from='playrecord'
+                      onDelete={() =>
+                        setPlayRecords((prev) =>
+                          prev.filter((item) => item.key !== record.key)
+                        )
+                      }
+                      type={record.total_episodes > 1 ? 'tv' : ''}
+                      origin={record.origin}
+                      orientation='horizontal'
+                      playTime={record.play_time}
+                      totalTime={record.total_time}
+                      isAnime={Boolean(record.is_anime)}
+                    />
+                    {record.new_episodes && record.new_episodes > 0 && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: '-6px',
+                          right: '-6px',
+                          zIndex: 100,
+                          pointerEvents: 'none',
+                          width: '28px',
+                          height: '28px',
+                        }}
+                      >
+                        <div
+                          style={{
+                            position: 'absolute',
+                            inset: '0',
+                            borderRadius: '9999px',
+                            backgroundColor: 'rgb(14 165 233)',
+                            animation:
+                              'ping-scale 1.5s cubic-bezier(0, 0, 0.2, 1) infinite',
+                          }}
+                        />
+                        <div
+                          style={{
+                            position: 'absolute',
+                            inset: '0',
+                            borderRadius: '9999px',
+                            backgroundColor: 'rgb(14 165 233)',
+                            animation:
+                              'pulse-scale 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                          }}
+                        />
+                        <div
+                          style={{
+                            position: 'absolute',
+                            inset: '0',
+                            borderRadius: '9999px',
+                            background:
+                              'linear-gradient(to bottom right, rgb(14 165 233), rgb(2 132 199))',
+                            color: 'white',
+                            fontSize: '11px',
+                            fontWeight: 'bold',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow:
+                              '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+                            animation: 'badge-scale 2s ease-in-out infinite',
+                          }}
+                        >
+                          +{record.new_episodes}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </VirtualScrollableRow>
+          </div>
+        )}
+      </section>
+
+      {showConfirmDialog &&
+        createPortal(
+          <div
+            className='fixed inset-0 z-[9999] flex items-center justify-center bg-black bg-opacity-50 p-4 transition-opacity duration-300'
+            onClick={() => setShowConfirmDialog(false)}
+          >
+            <div
+              className='max-w-md w-full rounded-lg border border-red-200 bg-white shadow-xl transition-all duration-300 dark:border-red-800 dark:bg-gray-800'
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className='p-6'>
+                <div className='mb-4 flex items-start gap-4'>
+                  <div className='flex-shrink-0'>
+                    <AlertTriangle className='h-8 w-8 text-red-500' />
+                  </div>
+                  <div className='flex-1'>
+                    <h3 className='mb-2 text-lg font-semibold text-gray-900 dark:text-gray-100'>
+                      清空播放记录
+                    </h3>
+                    <p className='text-sm text-gray-600 dark:text-gray-400'>
+                      确定要清空所有播放记录吗？此操作不可恢复。
+                    </p>
+                  </div>
                 </div>
-              );
-            })}
-      </ScrollableRow>
-    </section>
+
+                <div className='mt-6 flex gap-3'>
+                  <button
+                    onClick={() => setShowConfirmDialog(false)}
+                    className='flex-1 rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleClearConfirm}
+                    className='flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700'
+                  >
+                    确定清空
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {showPlayRecordsPanel &&
+        createPortal(
+          <PlayRecordsPanel
+            isOpen={showPlayRecordsPanel}
+            onClose={() => setShowPlayRecordsPanel(false)}
+          />,
+          document.body
+        )}
+    </>
   );
 }

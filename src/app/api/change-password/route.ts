@@ -2,8 +2,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { invalidateDeviceAccessToken } from '@/lib/access-token-invalidation';
 import { getAuthInfoFromCookie } from '@/lib/auth';
+import { getStorage } from '@/lib/db';
 import { db } from '@/lib/db';
+import { getUserDevices, revokeRefreshToken } from '@/lib/refresh-token';
 
 export const runtime = 'nodejs';
 
@@ -22,21 +25,22 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { newPassword, oldPassword } = body;
+    const { newPassword } = body;
+
+    // 获取认证信息
     const authInfo = getAuthInfoFromCookie(request);
     if (!authInfo || !authInfo.username) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    if (!oldPassword || typeof oldPassword !== 'string') {
-      return NextResponse.json({ error: '旧密码不得为空' }, { status: 400 });
+
+    // 验证新密码
+    if (!newPassword || typeof newPassword !== 'string') {
+      return NextResponse.json({ error: '新密码不得为空' }, { status: 400 });
     }
-    if (!newPassword || typeof newPassword !== 'string' || newPassword.trim().length < 6) {
-      return NextResponse.json({ error: '新密码长度至少为6位' }, { status: 400 });
-    }
-    if (oldPassword === newPassword) {
-      return NextResponse.json({ error: '新密码不能与旧密码相同' }, { status: 400 });
-    }
+
     const username = authInfo.username;
+
+    // 不允许站长修改密码（站长用户名等于 process.env.USERNAME）
     if (username === process.env.USERNAME) {
       return NextResponse.json(
         { error: '站长不能通过此接口修改密码' },
@@ -44,11 +48,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const valid = await db.verifyUser(username, oldPassword);
-    if (!valid) {
-      return NextResponse.json({ error: '旧密码错误' }, { status: 401 });
+    // 修改密码（只更新V2存储）
+    await db.changePasswordV2(username, newPassword);
+
+    // 撤销除当前设备外的所有 Refresh Token
+    try {
+      const currentTokenId = authInfo.tokenId;
+      const devices = await getUserDevices(username);
+      const storage = getStorage();
+
+      // 撤销所有非当前设备的 token
+      for (const device of devices) {
+        if (device.tokenId !== currentTokenId) {
+          invalidateDeviceAccessToken(username, device.tokenId);
+          await revokeRefreshToken(username, device.tokenId);
+          await storage.deletePushSubscriptionsByTokenId?.(username, device.tokenId);
+          console.log(`Revoked token ${device.tokenId} for ${username} after password change`);
+        }
+      }
+
+      console.log(`Password changed for ${username}, revoked ${devices.length - 1} other devices`);
+    } catch (error) {
+      console.error('Failed to revoke other devices after password change:', error);
+      // 不影响密码修改的成功，只记录错误
     }
-    await db.changePassword(username, newPassword);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

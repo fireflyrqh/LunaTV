@@ -3,7 +3,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import { Favorite } from '@/lib/types';
 
@@ -24,17 +23,28 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const config = await getConfig();
+    // 检查用户状态和执行迁移
     if (authInfo.username !== process.env.USERNAME) {
       // 非站长，检查用户存在或被封禁
-      const user = config.UserConfig.Users.find(
-        (u) => u.username === authInfo.username
-      );
-      if (!user) {
+      const userInfoV2 = await db.getUserInfoV2(authInfo.username);
+      if (!userInfoV2) {
         return NextResponse.json({ error: '用户不存在' }, { status: 401 });
       }
-      if (user.banned) {
+      if (userInfoV2.banned) {
         return NextResponse.json({ error: '用户已被封禁' }, { status: 401 });
+      }
+
+      // 检查收藏迁移标识，没有迁移标识时执行迁移
+      if (!userInfoV2.favorite_migrated) {
+        console.log(`用户 ${authInfo.username} 收藏未迁移，开始执行迁移...`);
+        await db.migrateFavorites(authInfo.username);
+      }
+    } else {
+      // 站长也需要执行迁移（站长可能不在数据库中，直接尝试迁移）
+      const userInfoV2 = await db.getUserInfoV2(authInfo.username);
+      if (!userInfoV2 || !userInfoV2.favorite_migrated) {
+        console.log(`站长 ${authInfo.username} 收藏未迁移，开始执行迁移...`);
+        await db.migrateFavorites(authInfo.username);
       }
     }
 
@@ -78,16 +88,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const config = await getConfig();
     if (authInfo.username !== process.env.USERNAME) {
       // 非站长，检查用户存在或被封禁
-      const user = config.UserConfig.Users.find(
-        (u) => u.username === authInfo.username
-      );
-      if (!user) {
+      const userInfoV2 = await db.getUserInfoV2(authInfo.username);
+      if (!userInfoV2) {
         return NextResponse.json({ error: '用户不存在' }, { status: 401 });
       }
-      if (user.banned) {
+      if (userInfoV2.banned) {
         return NextResponse.json({ error: '用户已被封禁' }, { status: 401 });
       }
     }
@@ -149,16 +156,13 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const config = await getConfig();
     if (authInfo.username !== process.env.USERNAME) {
       // 非站长，检查用户存在或被封禁
-      const user = config.UserConfig.Users.find(
-        (u) => u.username === authInfo.username
-      );
-      if (!user) {
+      const userInfoV2 = await db.getUserInfoV2(authInfo.username);
+      if (!userInfoV2) {
         return NextResponse.json({ error: '用户不存在' }, { status: 401 });
       }
-      if (user.banned) {
+      if (userInfoV2.banned) {
         return NextResponse.json({ error: '用户已被封禁' }, { status: 401 });
       }
     }
@@ -166,6 +170,23 @@ export async function DELETE(request: NextRequest) {
     const username = authInfo.username;
     const { searchParams } = new URL(request.url);
     const key = searchParams.get('key');
+    let keys: string[] | undefined;
+
+    try {
+      const text = await request.text();
+      if (text) {
+        const body = JSON.parse(text);
+        if (Array.isArray(body?.keys)) {
+          keys = Array.from(
+            new Set(
+              body.keys.filter((item: unknown) => typeof item === 'string')
+            )
+          );
+        }
+      }
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
 
     if (key) {
       // 删除单条
@@ -177,9 +198,31 @@ export async function DELETE(request: NextRequest) {
         );
       }
       await db.deleteFavorite(username, source, id);
+    } else if (keys && keys.length > 0) {
+      // 批量删除指定 key（按入口隔离后的可见项）
+      const parsed: Array<[string, string]> = [];
+      for (const item of keys) {
+        const [source, id] = item.split('+');
+        if (!source || !id) {
+          return NextResponse.json(
+            { error: 'Invalid key format' },
+            { status: 400 }
+          );
+        }
+        parsed.push([source, id]);
+      }
+      await Promise.all(
+        parsed.map(([source, id]) => db.deleteFavorite(username, source, id))
+      );
     } else {
       // 清空全部
-      await db.deleteAllFavorites(username);
+      const all = await db.getAllFavorites(username);
+      await Promise.all(
+        Object.keys(all).map(async (k) => {
+          const [s, i] = k.split('+');
+          if (s && i) await db.deleteFavorite(username, s, i);
+        })
+      );
     }
 
     return NextResponse.json({ success: true }, { status: 200 });

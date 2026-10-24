@@ -3,7 +3,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 
 export const runtime = 'nodejs';
@@ -23,16 +22,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const config = await getConfig();
     if (authInfo.username !== process.env.USERNAME) {
       // 非站长，检查用户存在或被封禁
-      const user = config.UserConfig.Users.find(
-        (u) => u.username === authInfo.username
-      );
-      if (!user) {
+      const userInfoV2 = await db.getUserInfoV2(authInfo.username);
+      if (!userInfoV2) {
         return NextResponse.json({ error: '用户不存在' }, { status: 401 });
       }
-      if (user.banned) {
+      if (userInfoV2.banned) {
         return NextResponse.json({ error: '用户已被封禁' }, { status: 401 });
       }
     }
@@ -60,16 +56,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const config = await getConfig();
     if (authInfo.username !== process.env.USERNAME) {
       // 非站长，检查用户存在或被封禁
-      const user = config.UserConfig.Users.find(
-        (u) => u.username === authInfo.username
-      );
-      if (!user) {
+      const userInfoV2 = await db.getUserInfoV2(authInfo.username);
+      if (!userInfoV2) {
         return NextResponse.json({ error: '用户不存在' }, { status: 401 });
       }
-      if (user.banned) {
+      if (userInfoV2.banned) {
         return NextResponse.json({ error: '用户已被封禁' }, { status: 401 });
       }
     }
@@ -112,16 +105,13 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const config = await getConfig();
     if (authInfo.username !== process.env.USERNAME) {
       // 非站长，检查用户存在或被封禁
-      const user = config.UserConfig.Users.find(
-        (u) => u.username === authInfo.username
-      );
-      if (!user) {
+      const userInfoV2 = await db.getUserInfoV2(authInfo.username);
+      if (!userInfoV2) {
         return NextResponse.json({ error: '用户不存在' }, { status: 401 });
       }
-      if (user.banned) {
+      if (userInfoV2.banned) {
         return NextResponse.json({ error: '用户已被封禁' }, { status: 401 });
       }
     }

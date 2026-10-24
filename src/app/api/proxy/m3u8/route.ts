@@ -27,7 +27,8 @@ export async function GET(request: Request) {
   let responseUsed = false;
 
   try {
-    const decodedUrl = url;
+    const decodedUrl = decodeURIComponent(url);
+
     response = await fetch(decodedUrl, {
       cache: 'no-cache',
       redirect: 'follow',
@@ -53,7 +54,7 @@ export async function GET(request: Request) {
       const baseUrl = getBaseUrl(finalUrl);
 
       // 重写 M3U8 内容
-      const modifiedContent = rewriteM3U8Content(m3u8Content, baseUrl, allowCORS);
+      const modifiedContent = rewriteM3U8Content(m3u8Content, baseUrl, request, allowCORS);
 
       const headers = new Headers();
       headers.set('Content-Type', contentType);
@@ -93,10 +94,25 @@ export async function GET(request: Request) {
   }
 }
 
-function rewriteM3U8Content(content: string, baseUrl: string, allowCORS: boolean) {
-  // 使用站内相对路径，播放列表中的地址会相对于播放列表自身的 URL 解析。
-  // 这样既不依赖可伪造的 Host 头，也不会在 HTTPS 站点下拼出 http:// 造成混合内容被拦截。
-  const proxyBase = '/api/proxy';
+function rewriteM3U8Content(content: string, baseUrl: string, req: Request, allowCORS: boolean) {
+  // 从 referer 头提取协议信息
+  const referer = req.headers.get('referer');
+  let protocol = 'http';
+  if (referer) {
+    try {
+      const refererUrl = new URL(referer);
+      protocol = refererUrl.protocol.replace(':', '');
+    } catch (error) {
+      // ignore
+    }
+  }
+
+  const host = req.headers.get('host');
+  const proxyBase = `${protocol}://${host}/api/proxy`;
+
+  // 获取 moontv-source 参数
+  const reqUrl = new URL(req.url);
+  const source = reqUrl.searchParams.get('moontv-source') || '';
 
   const lines = content.split('\n');
   const rewrittenLines: string[] = [];
@@ -107,19 +123,19 @@ function rewriteM3U8Content(content: string, baseUrl: string, allowCORS: boolean
     // 处理 TS 片段 URL 和其他媒体文件
     if (line && !line.startsWith('#')) {
       const resolvedUrl = resolveUrl(baseUrl, line);
-      const proxyUrl = allowCORS ? resolvedUrl : `${proxyBase}/segment?url=${encodeURIComponent(resolvedUrl)}`;
+      const proxyUrl = allowCORS ? resolvedUrl : `${proxyBase}/segment?url=${encodeURIComponent(resolvedUrl)}&moontv-source=${source}`;
       rewrittenLines.push(proxyUrl);
       continue;
     }
 
     // 处理 EXT-X-MAP 标签中的 URI
     if (line.startsWith('#EXT-X-MAP:')) {
-      line = rewriteMapUri(line, baseUrl, proxyBase);
+      line = rewriteMapUri(line, baseUrl, proxyBase, allowCORS, source);
     }
 
     // 处理 EXT-X-KEY 标签中的 URI
     if (line.startsWith('#EXT-X-KEY:')) {
-      line = rewriteKeyUri(line, baseUrl, proxyBase);
+      line = rewriteKeyUri(line, baseUrl, proxyBase, allowCORS, source);
     }
 
     // 处理嵌套的 M3U8 文件 (EXT-X-STREAM-INF)
@@ -131,7 +147,7 @@ function rewriteM3U8Content(content: string, baseUrl: string, allowCORS: boolean
         const nextLine = lines[i].trim();
         if (nextLine && !nextLine.startsWith('#')) {
           const resolvedUrl = resolveUrl(baseUrl, nextLine);
-          const proxyUrl = `${proxyBase}/m3u8?url=${encodeURIComponent(resolvedUrl)}`;
+          const proxyUrl = `${proxyBase}/m3u8?url=${encodeURIComponent(resolvedUrl)}&moontv-source=${source}`;
           rewrittenLines.push(proxyUrl);
         } else {
           rewrittenLines.push(nextLine);
@@ -146,23 +162,23 @@ function rewriteM3U8Content(content: string, baseUrl: string, allowCORS: boolean
   return rewrittenLines.join('\n');
 }
 
-function rewriteMapUri(line: string, baseUrl: string, proxyBase: string) {
+function rewriteMapUri(line: string, baseUrl: string, proxyBase: string, allowCORS: boolean, source: string) {
   const uriMatch = line.match(/URI="([^"]+)"/);
   if (uriMatch) {
     const originalUri = uriMatch[1];
     const resolvedUrl = resolveUrl(baseUrl, originalUri);
-    const proxyUrl = `${proxyBase}/segment?url=${encodeURIComponent(resolvedUrl)}`;
+    const proxyUrl = allowCORS ? resolvedUrl : `${proxyBase}/segment?url=${encodeURIComponent(resolvedUrl)}&moontv-source=${source}`;
     return line.replace(uriMatch[0], `URI="${proxyUrl}"`);
   }
   return line;
 }
 
-function rewriteKeyUri(line: string, baseUrl: string, proxyBase: string) {
+function rewriteKeyUri(line: string, baseUrl: string, proxyBase: string, allowCORS: boolean, source: string) {
   const uriMatch = line.match(/URI="([^"]+)"/);
   if (uriMatch) {
     const originalUri = uriMatch[1];
     const resolvedUrl = resolveUrl(baseUrl, originalUri);
-    const proxyUrl = `${proxyBase}/key?url=${encodeURIComponent(resolvedUrl)}`;
+    const proxyUrl = allowCORS ? resolvedUrl : `${proxyBase}/key?url=${encodeURIComponent(resolvedUrl)}&moontv-source=${source}`;
     return line.replace(uriMatch[0], `URI="${proxyUrl}"`);
   }
   return line;

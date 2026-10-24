@@ -2,9 +2,9 @@
 
 'use client';
 
-import { Cat, Clover, Film, Home, Menu, Radio, Search, Star, Tv } from 'lucide-react';
+import { Blend, Cat, Clover, Container, Film, Globe, Home, Menu, Search, Star, Tv, TvMinimalPlay, Users } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import {
   createContext,
   useCallback,
@@ -14,7 +14,10 @@ import {
   useState,
 } from 'react';
 
+import { SPECIAL_SOURCE_PATH } from '@/lib/special-source.client';
+
 import { useSite } from './SiteProvider';
+import { useWatchRoomContextSafe } from './WatchRoomProvider';
 
 interface SidebarContextType {
   isCollapsed: boolean;
@@ -50,13 +53,22 @@ interface SidebarProps {
 declare global {
   interface Window {
     __sidebarCollapsed?: boolean;
+    RUNTIME_CONFIG?: {
+      EnableComments?: boolean;
+      RecommendationDataSource?: string;
+      [key: string]: any;
+    };
   }
 }
 
 const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const watchRoomContext = useWatchRoomContextSafe();
+
+  if (pathname === '/watch-room/screen') {
+    return null;
+  }
   // 若同一次 SPA 会话中已经读取过折叠状态，则直接复用，避免闪烁
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
     if (
@@ -92,19 +104,14 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
   const [active, setActive] = useState(activePath);
 
   useEffect(() => {
-    // 优先使用传入的 activePath
-    if (activePath) {
-      setActive(activePath);
-    } else {
-      // 否则使用当前路径
-      const getCurrentFullPath = () => {
-        const queryString = searchParams.toString();
-        return queryString ? `${pathname}?${queryString}` : pathname;
-      };
-      const fullPath = getCurrentFullPath();
-      setActive(fullPath);
-    }
-  }, [activePath, pathname, searchParams]);
+    // 立即根据当前路径更新状态，不等待页面加载
+    const getCurrentFullPath = () => {
+      const queryString = searchParams.toString();
+      return queryString ? `${pathname}?${queryString}` : pathname;
+    };
+    const fullPath = getCurrentFullPath();
+    setActive(fullPath);
+  }, [pathname, searchParams]);
 
   const handleToggle = useCallback(() => {
     const newState = !isCollapsed;
@@ -116,13 +123,15 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
     onToggle?.(newState);
   }, [isCollapsed, onToggle]);
 
-  const handleSearchClick = useCallback(() => {
-    router.push('/search');
-  }, [router]);
-
   const contextValue = {
     isCollapsed,
   };
+
+  // /under 下的「搜索」留在特殊源入口，避免一点就跳回普通搜索
+  const isUnderPath =
+    pathname === SPECIAL_SOURCE_PATH ||
+    pathname.startsWith(`${SPECIAL_SOURCE_PATH}/`);
+  const searchHref = isUnderPath ? SPECIAL_SOURCE_PATH : '/search';
 
   const [menuItems, setMenuItems] = useState([
     {
@@ -145,37 +154,97 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
       label: '综艺',
       href: '/douban?type=show',
     },
+    {
+      icon: TvMinimalPlay,
+      label: '电视直播',
+      href: '/live',
+    },
   ]);
 
   useEffect(() => {
     const runtimeConfig = (window as any).RUNTIME_CONFIG;
-    if (runtimeConfig?.ENABLE_WEB_LIVE) {
-      setMenuItems((prevItems) => {
-        if (prevItems.some((item) => item.href === '/live')) return prevItems;
-        return [
-          ...prevItems,
-          {
-            icon: Radio,
-            label: '直播',
-            href: '/live',
-          },
-        ];
+
+    // 基础菜单项（不包括观影室）
+    const items = [
+      {
+        icon: Film,
+        label: '电影',
+        href: '/douban?type=movie',
+      },
+      {
+        icon: Tv,
+        label: '剧集',
+        href: '/douban?type=tv',
+      },
+      {
+        icon: Cat,
+        label: '动漫',
+        href: '/douban?type=anime',
+      },
+      {
+        icon: Clover,
+        label: '综艺',
+        href: '/douban?type=show',
+      },
+      ...(runtimeConfig?.LIVE_ENABLED
+        ? [
+            {
+              icon: TvMinimalPlay,
+              label: '电视直播',
+              href: '/live',
+            },
+          ]
+        : []),
+    ];
+
+    // 如果启用网络直播，添加网络直播入口
+    if (runtimeConfig?.WEB_LIVE_ENABLED) {
+      items.push({
+        icon: Globe,
+        label: '网络直播',
+        href: '/web-live',
       });
     }
+
+    // 如果配置了 OpenList 或 Emby，添加私人影库入口
+    if (runtimeConfig?.PRIVATE_LIBRARY_ENABLED) {
+      items.push({
+        icon: Container,
+        label: '私人影库',
+        href: '/private-library',
+      });
+    }
+
+    if (runtimeConfig?.ADVANCED_RECOMMENDATION_ENABLED) {
+      items.push({
+        icon: Blend,
+        label: '高级推荐',
+        href: '/advanced-recommendation',
+      });
+    }
+
+    // 如果启用观影室，添加观影室入口
+    if (watchRoomContext?.isEnabled) {
+      items.push({
+        icon: Users,
+        label: '观影室',
+        href: '/watch-room',
+      });
+    }
+
+    // 添加自定义分类（如果有）
     if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
-      setMenuItems((prevItems) => {
-        if (prevItems.some((item) => item.href === '/douban?type=custom')) return prevItems;
-        return [
-          ...prevItems,
-          {
-            icon: Star,
-            label: '自定义',
-            href: '/douban?type=custom',
-          },
-        ];
+      items.push({
+        icon: Star,
+        label: '自定义',
+        href: '/douban?type=custom',
       });
     }
-  }, []);
+
+    // 特殊源入口不在导航展示，只能手动访问 /under
+
+    setMenuItems(items);
+  }, [watchRoomContext?.isEnabled]);
 
   return (
     <SidebarContext.Provider value={contextValue}>
@@ -214,7 +283,11 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
             <nav className='px-2 mt-4 space-y-1'>
               <Link
                 href='/'
-                onClick={() => setActive('/')}
+                prefetch={false}
+                onClick={(e) => {
+                  // 确保点击事件立即生效，不被其他状态更新阻塞
+                  e.currentTarget.blur();
+                }}
                 data-active={active === '/'}
                 className={`group flex items-center rounded-lg px-2 py-2 pl-4 text-gray-700 hover:bg-gray-100/30 hover:text-green-600 data-[active=true]:bg-green-500/20 data-[active=true]:text-green-700 font-medium transition-colors duration-200 min-h-[40px] dark:text-gray-300 dark:hover:text-green-400 dark:data-[active=true]:bg-green-500/10 dark:data-[active=true]:text-green-400 ${isCollapsed ? 'w-full max-w-none mx-0' : 'mx-0'
                   } gap-3 justify-start`}
@@ -229,13 +302,8 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
                 )}
               </Link>
               <Link
-                href='/search'
-                onClick={(e) => {
-                  e.preventDefault();
-                  handleSearchClick();
-                  setActive('/search');
-                }}
-                data-active={active === '/search'}
+                href={searchHref}
+                data-active={active === searchHref}
                 className={`group flex items-center rounded-lg px-2 py-2 pl-4 text-gray-700 hover:bg-gray-100/30 hover:text-green-600 data-[active=true]:bg-green-500/20 data-[active=true]:text-green-700 font-medium transition-colors duration-200 min-h-[40px] dark:text-gray-300 dark:hover:text-green-400 dark:data-[active=true]:bg-green-500/10 dark:data-[active=true]:text-green-400 ${isCollapsed ? 'w-full max-w-none mx-0' : 'mx-0'
                   } gap-3 justify-start`}
               >
@@ -261,16 +329,21 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
                   const decodedActive = decodeURIComponent(active);
                   const decodedItemHref = decodeURIComponent(item.href);
 
+                  // 提取路径名（不包含查询参数）
+                  const activePathname = decodedActive.split('?')[0];
+                  const itemPathname = decodedItemHref.split('?')[0];
+
                   const isActive =
                     decodedActive === decodedItemHref ||
                     (decodedActive.startsWith('/douban') &&
-                      decodedActive.includes(`type=${typeMatch}`));
+                      decodedActive.includes(`type=${typeMatch}`)) ||
+                    // 对于没有type参数的路径，只比较路径名
+                    (!typeMatch && activePathname === itemPathname);
                   const Icon = item.icon;
                   return (
                     <Link
                       key={item.label}
                       href={item.href}
-                      onClick={() => setActive(item.href)}
                       data-active={isActive}
                       className={`group flex items-center rounded-lg px-2 py-2 pl-4 text-sm text-gray-700 hover:bg-gray-100/30 hover:text-green-600 data-[active=true]:bg-green-500/20 data-[active=true]:text-green-700 transition-colors duration-200 min-h-[40px] dark:text-gray-300 dark:hover:text-green-400 dark:data-[active=true]:bg-green-500/10 dark:data-[active=true]:text-green-400 ${isCollapsed ? 'w-full max-w-none mx-0' : 'mx-0'
                         } gap-3 justify-start`}

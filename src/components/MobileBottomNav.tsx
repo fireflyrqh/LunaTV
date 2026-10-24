@@ -2,10 +2,12 @@
 
 'use client';
 
-import { Cat, Clover, Film, Home, Radio, Star, Tv } from 'lucide-react';
+import { Blend, Cat, Clover, Container, Film, Globe, Home, Star, Tv, TvMinimalPlay, Users } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
+
+import { useWatchRoomContextSafe } from './WatchRoomProvider';
 
 interface MobileBottomNavProps {
   /**
@@ -16,9 +18,19 @@ interface MobileBottomNavProps {
 
 const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const watchRoomContext = useWatchRoomContextSafe();
 
-  // 当前激活路径：优先使用传入的 activePath，否则回退到浏览器地址
-  const currentActive = activePath ?? pathname;
+  // 直接使用当前路由状态，确保立即响应路由变化
+  const getCurrentFullPath = () => {
+    const queryString = searchParams.toString();
+    return queryString ? `${pathname}?${queryString}` : pathname;
+  };
+  const currentActive = activePath ?? getCurrentFullPath();
+
+  if (pathname === '/watch-room/screen') {
+    return null;
+  }
 
   const [navItems, setNavItems] = useState([
     { icon: Home, label: '首页', href: '/' },
@@ -42,26 +54,98 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
       label: '综艺',
       href: '/douban?type=show',
     },
-    {
-      icon: Radio,
-      label: '直播',
-      href: '/live',
-    },
+      {
+        icon: TvMinimalPlay,
+        label: '电视直播',
+        href: '/live',
+      },
   ]);
 
   useEffect(() => {
     const runtimeConfig = (window as any).RUNTIME_CONFIG;
-    if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
-      setNavItems((prevItems) => [
-        ...prevItems,
-        {
-          icon: Star,
-          label: '自定义',
-          href: '/douban?type=custom',
-        },
-      ]);
+
+    // 基础导航项（不包括观影室）
+    const items = [
+      { icon: Home, label: '首页', href: '/' },
+      {
+        icon: Film,
+        label: '电影',
+        href: '/douban?type=movie',
+      },
+      {
+        icon: Tv,
+        label: '剧集',
+        href: '/douban?type=tv',
+      },
+      {
+        icon: Cat,
+        label: '动漫',
+        href: '/douban?type=anime',
+      },
+      {
+        icon: Clover,
+        label: '综艺',
+        href: '/douban?type=show',
+      },
+      ...(runtimeConfig?.LIVE_ENABLED
+        ? [
+            {
+              icon: TvMinimalPlay,
+              label: '电视直播',
+              href: '/live',
+            },
+          ]
+        : []),
+    ];
+
+    // 如果启用网络直播，添加网络直播入口
+    if (runtimeConfig?.WEB_LIVE_ENABLED) {
+      items.push({
+        icon: Globe,
+        label: '网络直播',
+        href: '/web-live',
+      });
     }
-  }, []);
+
+    // 如果配置了 OpenList 或 Emby，添加私人影库入口
+    if (runtimeConfig?.PRIVATE_LIBRARY_ENABLED) {
+      items.push({
+        icon: Container,
+        label: '私人影库',
+        href: '/private-library',
+      });
+    }
+
+    if (runtimeConfig?.ADVANCED_RECOMMENDATION_ENABLED) {
+      items.push({
+        icon: Blend,
+        label: '高级推荐',
+        href: '/advanced-recommendation',
+      });
+    }
+
+    // 如果启用观影室，添加观影室入口
+    if (watchRoomContext?.isEnabled) {
+      items.push({
+        icon: Users,
+        label: '观影室',
+        href: '/watch-room',
+      });
+    }
+
+    // 添加自定义分类（如果有）
+    if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
+      items.push({
+        icon: Star,
+        label: '自定义',
+        href: '/douban?type=custom',
+      });
+    }
+
+    // 特殊源入口不在导航展示，只能手动访问 /under
+
+    setNavItems(items);
+  }, [watchRoomContext?.isEnabled]);
 
   const isActive = (href: string) => {
     const typeMatch = href.match(/type=([^&]+)/)?.[1];
@@ -98,6 +182,7 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
             >
               <Link
                 href={item.href}
+                prefetch={false}
                 className='flex flex-col items-center justify-center w-full h-14 gap-1 text-xs'
               >
                 <item.icon

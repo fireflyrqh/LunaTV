@@ -2,7 +2,15 @@
 
 'use client';
 
-import { ChevronRight } from 'lucide-react';
+import {
+  BookMarked,
+  BookOpen,
+  Bot,
+  ChevronRight,
+  Link as LinkIcon,
+  ListVideo,
+  Music,
+} from 'lucide-react';
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
 
@@ -10,39 +18,361 @@ import {
   BangumiCalendarData,
   GetBangumiCalendarData,
 } from '@/lib/bangumi.client';
-// 客户端收藏 API
-import {
-  clearAllFavorites,
-  getAllFavorites,
-  getAllPlayRecords,
-  subscribeToDataUpdates,
-} from '@/lib/db.client';
 import { getDoubanCategories } from '@/lib/douban.client';
+import { getTMDBImageUrl, TMDBItem } from '@/lib/tmdb.client';
 import { DoubanItem } from '@/lib/types';
+import { base58Encode, processImageUrl } from '@/lib/utils';
 
-import CapsuleSwitch from '@/components/CapsuleSwitch';
+import AIChatPanel from '@/components/AIChatPanel';
+import BannerCarousel from '@/components/BannerCarousel';
 import ContinueWatching from '@/components/ContinueWatching';
+import FireworksCanvas from '@/components/FireworksCanvas';
+import HttpWarningDialog from '@/components/HttpWarningDialog';
 import PageLayout from '@/components/PageLayout';
 import ScrollableRow from '@/components/ScrollableRow';
 import { useSite } from '@/components/SiteProvider';
+import Toast, { ToastProps } from '@/components/Toast';
 import VideoCard from '@/components/VideoCard';
 
+// 首页模块配置接口
+interface HomeModule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  order: number;
+}
+
 function HomeClient() {
-  const [activeTab, setActiveTab] = useState<'home' | 'favorites'>('home');
+  // 移除了 activeTab 状态，收藏夹功能已移到 UserMenu
   const [hotMovies, setHotMovies] = useState<DoubanItem[]>([]);
   const [hotTvShows, setHotTvShows] = useState<DoubanItem[]>([]);
   const [hotVarietyShows, setHotVarietyShows] = useState<DoubanItem[]>([]);
+  const [hotDuanju, setHotDuanju] = useState<any[]>([]);
+  const [upcomingContent, setUpcomingContent] = useState<TMDBItem[]>([]);
   const [bangumiCalendarData, setBangumiCalendarData] = useState<
     BangumiCalendarData[]
   >([]);
   const [loading, setLoading] = useState(true);
-  const { announcement } = useSite();
+  const { announcement, announcementDisplayMode } = useSite();
+  // 首页模块配置状态
+  const [homeModules, setHomeModules] = useState<HomeModule[]>([
+    { id: 'hotMovies', name: '热门电影', enabled: true, order: 0 },
+    { id: 'hotDuanju', name: '热播短剧', enabled: true, order: 1 },
+    { id: 'bangumiCalendar', name: '新番放送', enabled: true, order: 2 },
+    { id: 'hotTvShows', name: '热门剧集', enabled: true, order: 3 },
+    { id: 'hotVarietyShows', name: '热门综艺', enabled: true, order: 4 },
+    { id: 'upcomingContent', name: '即将上映', enabled: true, order: 5 },
+  ]);
+  const [homeBannerEnabled, setHomeBannerEnabled] = useState(true);
+  const [homeContinueWatchingEnabled, setHomeContinueWatchingEnabled] =
+    useState(true);
 
   const [showAnnouncement, setShowAnnouncement] = useState(false);
+  const [showHttpWarning, setShowHttpWarning] = useState(true);
+  const [showAIChat, setShowAIChat] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiDefaultMessageNoVideo, setAiDefaultMessageNoVideo] = useState(
+    '你好！我是MoonTVPlus的AI影视助手。想看什么电影或剧集？需要推荐吗？'
+  );
+  const [sourceSearchEnabled, setSourceSearchEnabled] = useState(true);
+  const [musicEnabled, setMusicEnabled] = useState(false);
+  const [mangaEnabled, setMangaEnabled] = useState(false);
+  const [booksEnabled, setBooksEnabled] = useState(false);
+  const [netdiskTempPlayEnabled, setNetdiskTempPlayEnabled] = useState(false);
+  const [showDirectPlayDialog, setShowDirectPlayDialog] = useState(false);
+  const [directPlayUrl, setDirectPlayUrl] = useState('');
+  const [directPlaySubmitting, setDirectPlaySubmitting] = useState(false);
+  const [toast, setToast] = useState<ToastProps | null>(null);
+
+  const detectNetdiskLink = (
+    url: string
+  ): {
+    provider: 'quark' | 'mobile' | 'baidu' | 'tianyi' | '123' | 'uc' | '115';
+    shareUrl: string;
+    passcode?: string;
+  } | null => {
+    const trimmed = url.trim();
+
+    const pickPasscode = (...values: Array<string | undefined>) =>
+      values.map((item) => item?.trim()).find(Boolean);
+
+    const inlinePasscode = (text: string) =>
+      pickPasscode(
+        text.match(
+          /(?:提取码|访问码|密码)\s*[:：=]?\s*([a-zA-Z0-9]{4,8})/i
+        )?.[1],
+        text.match(/[?&](?:pwd|passcode|accessCode)=([^&\s]+)/i)?.[1]
+      );
+
+    if (
+      /https:\/\/(?:www\.)?123(?:684|865|912|pan)\.(?:com|cn)\/s\//i.test(
+        trimmed
+      )
+    ) {
+      return {
+        provider: '123',
+        shareUrl: trimmed,
+        passcode: pickPasscode(
+          trimmed.match(/[?&]pwd=([^&]+)/i)?.[1],
+          inlinePasscode(trimmed)
+        ),
+      };
+    }
+
+    if (
+      /https:\/\/cloud\.189\.cn\/(web\/share\?code=|t\/)/i.test(trimmed) ||
+      /https:\/\/h5\.cloud\.189\.cn\/share\.html#\/t\//i.test(trimmed)
+    ) {
+      return {
+        provider: 'tianyi',
+        shareUrl: trimmed,
+        passcode: pickPasscode(
+          trimmed.match(/[?&]pwd=([^&]+)/i)?.[1],
+          inlinePasscode(trimmed)
+        ),
+      };
+    }
+
+    if (/pan\.baidu\.com\/(s\/|wap\/init\?surl=)/i.test(trimmed)) {
+      return {
+        provider: 'baidu',
+        shareUrl: trimmed,
+        passcode: pickPasscode(
+          trimmed.match(/[?&](?:pwd|accessCode)=([^&]+)/i)?.[1],
+          inlinePasscode(trimmed)
+        ),
+      };
+    }
+
+    if (/https:\/\/pan\.quark\.cn\/s\//i.test(trimmed)) {
+      return {
+        provider: 'quark',
+        shareUrl: trimmed,
+        passcode: pickPasscode(
+          trimmed.match(/[?&](?:pwd|passcode)=([^&]+)/i)?.[1],
+          inlinePasscode(trimmed)
+        ),
+      };
+    }
+
+    if (/https:\/\/drive\.uc\.cn\/s\//i.test(trimmed)) {
+      return {
+        provider: 'uc',
+        shareUrl: trimmed,
+        passcode: pickPasscode(
+          trimmed.match(/[?&](?:pwd|passcode)=([^&]+)/i)?.[1],
+          inlinePasscode(trimmed)
+        ),
+      };
+    }
+
+    if (/https:\/\/(?:yun|caiyun)\.139\.com\//i.test(trimmed)) {
+      return { provider: 'mobile', shareUrl: trimmed };
+    }
+
+    if (/https:\/\/(?:115|anxia|115cdn)\.com\/s\//i.test(trimmed)) {
+      return {
+        provider: '115',
+        shareUrl: trimmed,
+        passcode: pickPasscode(
+          trimmed.match(/[?&](?:password|pwd|passcode)=([^&]+)/i)?.[1],
+          inlinePasscode(trimmed)
+        ),
+      };
+    }
+
+    return null;
+  };
+
+  const handleDirectPlay = () => {
+    setDirectPlayUrl('');
+    setShowDirectPlayDialog(true);
+  };
+
+  const submitDirectPlay = async () => {
+    const trimmed = directPlayUrl.trim();
+    if (!trimmed) return;
+    setDirectPlaySubmitting(true);
+    try {
+      const netdisk = detectNetdiskLink(trimmed);
+      if (netdisk && !netdiskTempPlayEnabled) {
+        throw new Error('无权限使用临时播放');
+      }
+
+      if (netdisk) {
+        const source =
+          netdisk.provider === 'mobile'
+            ? 'netdisk-mobile'
+            : netdisk.provider === 'baidu'
+            ? 'netdisk-baidu'
+            : netdisk.provider === 'tianyi'
+            ? 'netdisk-tianyi'
+            : netdisk.provider === '115'
+            ? 'netdisk-115'
+            : netdisk.provider === 'uc'
+            ? 'netdisk-uc'
+            : netdisk.provider === '123'
+            ? 'netdisk-123'
+            : 'netdisk-quark';
+        const id = base58Encode(
+          JSON.stringify({
+            shareUrl: netdisk.shareUrl,
+            passcode: netdisk.passcode || '',
+          })
+        );
+        if (!id) {
+          throw new Error('网盘链接编码失败');
+        }
+        const targetUrl = `/play?source=${encodeURIComponent(
+          source
+        )}&id=${encodeURIComponent(id)}&title=${encodeURIComponent(
+          '网盘直链播放'
+        )}`;
+        setShowDirectPlayDialog(false);
+        setDirectPlayUrl('');
+        window.location.assign(targetUrl);
+        return;
+      }
+
+      const encoded = base58Encode(trimmed);
+      if (!encoded) return;
+      const targetUrl = `/play?source=directplay&id=${encodeURIComponent(
+        encoded
+      )}`;
+      setShowDirectPlayDialog(false);
+      setDirectPlayUrl('');
+      window.location.assign(targetUrl);
+    } catch (error) {
+      setToast({
+        message: error instanceof Error ? error.message : '播放失败',
+        type: 'error',
+        onClose: () => setToast(null),
+      });
+    } finally {
+      setDirectPlaySubmitting(false);
+    }
+  };
+
+  const loadHomeLayoutSettings = () => {
+    if (typeof window === 'undefined') return;
+
+    const savedHomeModules = localStorage.getItem('homeModules');
+    if (savedHomeModules) {
+      try {
+        setHomeModules(JSON.parse(savedHomeModules));
+      } catch (error) {
+        console.error('解析首页模块配置失败:', error);
+      }
+    }
+
+    const savedHomeBannerEnabled = localStorage.getItem('homeBannerEnabled');
+    if (savedHomeBannerEnabled !== null) {
+      setHomeBannerEnabled(savedHomeBannerEnabled === 'true');
+    }
+
+    const savedHomeContinueWatchingEnabled = localStorage.getItem(
+      'homeContinueWatchingEnabled'
+    );
+    if (savedHomeContinueWatchingEnabled !== null) {
+      setHomeContinueWatchingEnabled(
+        savedHomeContinueWatchingEnabled === 'true'
+      );
+    }
+  };
+
+  // 加载首页模块配置
+  useEffect(() => {
+    loadHomeLayoutSettings();
+  }, []);
+
+  // 监听首页模块配置更新事件
+  useEffect(() => {
+    const handleHomeModulesUpdated = () => {
+      loadHomeLayoutSettings();
+    };
+
+    window.addEventListener('homeModulesUpdated', handleHomeModulesUpdated);
+    return () => {
+      window.removeEventListener(
+        'homeModulesUpdated',
+        handleHomeModulesUpdated
+      );
+    };
+  }, []);
+
+  // 检查AI功能是否启用
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const enabled =
+        (window as any).RUNTIME_CONFIG?.AI_ENABLED &&
+        (window as any).RUNTIME_CONFIG?.AI_ENABLE_HOMEPAGE_ENTRY;
+      setAiEnabled(enabled);
+
+      // 加载AI默认消息配置
+      const defaultMsg = (window as any).RUNTIME_CONFIG
+        ?.AI_DEFAULT_MESSAGE_NO_VIDEO;
+      if (defaultMsg) {
+        setAiDefaultMessageNoVideo(defaultMsg);
+      }
+    }
+  }, []);
+
+  // 检查源站寻片功能是否启用
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const enabled =
+        (window as any).RUNTIME_CONFIG?.ENABLE_SOURCE_SEARCH !== false;
+      setSourceSearchEnabled(enabled);
+    }
+  }, []);
+
+  // 检查音乐功能是否启用
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const enabled = !!(window as any).RUNTIME_CONFIG?.MUSIC_ENABLED;
+      setMusicEnabled(enabled);
+    }
+  }, []);
+
+  // 检查漫画功能是否启用
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const enabled = !!(window as any).RUNTIME_CONFIG?.SUWAYOMI_ENABLED;
+      setMangaEnabled(enabled);
+    }
+  }, []);
+
+  // 检查电子书功能是否启用
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const enabled = !!(window as any).RUNTIME_CONFIG?.BOOKS_ENABLED;
+      setBooksEnabled(enabled);
+    }
+  }, []);
+
+  // 检查网盘临时播放权限，仅有权限时在直链播放弹窗展示网盘在线播放提示
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const enabled = !!(window as any).RUNTIME_CONFIG
+        ?.NETDISK_TEMP_PLAY_ENABLED;
+      setNetdiskTempPlayEnabled(enabled);
+    }
+  }, []);
 
   // 检查公告弹窗状态
   useEffect(() => {
     if (typeof window !== 'undefined' && announcement) {
+      // 会话级标记：只在首次访问站点时弹出，导航切回首页不重复弹
+      if (sessionStorage.getItem('announcementShown')) {
+        return;
+      }
+      // 每次显示模式：每次新会话首次访问弹出一次
+      if (announcementDisplayMode === 'every') {
+        setShowAnnouncement(true);
+        sessionStorage.setItem('announcementShown', '1');
+        return;
+      }
+      // 单次显示模式：localStorage 记住已看过的公告文本，换公告则重新弹出
       const hasSeenAnnouncement = localStorage.getItem('hasSeenAnnouncement');
       if (hasSeenAnnouncement !== announcement) {
         setShowAnnouncement(true);
@@ -50,480 +380,698 @@ function HomeClient() {
         setShowAnnouncement(Boolean(!hasSeenAnnouncement && announcement));
       }
     }
-  }, [announcement]);
-
-  // 收藏夹数据
-  type FavoriteItem = {
-    id: string;
-    source: string;
-    title: string;
-    poster: string;
-    episodes: number;
-    source_name: string;
-    currentEpisode?: number;
-    search_title?: string;
-    origin?: 'vod' | 'live';
-  };
-
-  const [favoriteItems, setFavoriteItems] = useState<FavoriteItem[]>([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [announcement, announcementDisplayMode]);
 
   useEffect(() => {
-    const fetchRecommendData = async () => {
-      try {
-        setLoading(true);
+    const CACHE_DURATION = 60 * 60 * 1000; // 1小时
 
-        // 并行获取热门电影、热门剧集、热门综艺和番剧日历
-        // 使用 allSettled 避免单个请求失败导致全部数据为空
-        const [moviesRes, tvShowsRes, varietyShowsRes, bangumiRes] =
-          await Promise.allSettled([
+    const getCache = (key: string) => {
+      try {
+        const cached = localStorage.getItem(key);
+        if (!cached) return null;
+        const { data, timestamp } = JSON.parse(cached);
+        return { data, expired: Date.now() - timestamp > CACHE_DURATION };
+      } catch {
+        return null;
+      }
+    };
+
+    const setCache = (key: string, data: any) => {
+      try {
+        localStorage.setItem(
+          key,
+          JSON.stringify({ data, timestamp: Date.now() })
+        );
+      } catch {
+        // Ignore localStorage errors
+      }
+    };
+
+    const moviesCache = getCache('homepage_movies');
+    const tvShowsCache = getCache('homepage_tvshows');
+    const varietyCache = getCache('homepage_variety');
+    const bangumiCache = getCache('homepage_bangumi');
+    const duanjuCache = getCache('homepage_duanju');
+    const upcomingCache = getCache('homepage_upcoming');
+
+    if (moviesCache?.data) setHotMovies(moviesCache.data);
+    if (tvShowsCache?.data) setHotTvShows(tvShowsCache.data);
+    if (varietyCache?.data) setHotVarietyShows(varietyCache.data);
+    if (bangumiCache?.data) setBangumiCalendarData(bangumiCache.data);
+    if (duanjuCache?.data) setHotDuanju(duanjuCache.data);
+    if (upcomingCache?.data) setUpcomingContent(upcomingCache.data);
+
+    const hasCache =
+      moviesCache ||
+      tvShowsCache ||
+      varietyCache ||
+      bangumiCache ||
+      duanjuCache ||
+      upcomingCache;
+    if (hasCache) setLoading(false);
+
+    const needsRefresh =
+      !moviesCache ||
+      moviesCache.expired ||
+      !tvShowsCache ||
+      tvShowsCache.expired ||
+      !varietyCache ||
+      varietyCache.expired ||
+      !bangumiCache ||
+      bangumiCache.expired ||
+      !duanjuCache ||
+      duanjuCache.expired ||
+      !upcomingCache ||
+      upcomingCache.expired;
+
+    if (needsRefresh) {
+      (async () => {
+        try {
+          const [
+            moviesData,
+            tvShowsData,
+            varietyShowsData,
+            bangumiCalendarData,
+          ] = await Promise.all([
             getDoubanCategories({
               kind: 'movie',
               category: '热门',
               type: '全部',
+            }).catch((error) => {
+              console.error('获取热门电影数据失败:', error);
+              return null;
             }),
-            getDoubanCategories({ kind: 'tv', category: 'tv', type: 'tv' }),
-            getDoubanCategories({ kind: 'tv', category: 'show', type: 'show' }),
-            GetBangumiCalendarData(),
+            getDoubanCategories({
+              kind: 'tv',
+              category: 'tv',
+              type: 'tv',
+            }).catch((error) => {
+              console.error('获取热门剧集数据失败:', error);
+              return null;
+            }),
+            getDoubanCategories({
+              kind: 'tv',
+              category: 'show',
+              type: 'show',
+            }).catch((error) => {
+              console.error('获取热门综艺数据失败:', error);
+              return null;
+            }),
+            GetBangumiCalendarData().catch((error) => {
+              console.error('获取新番放送数据失败:', error);
+              return [];
+            }),
           ]);
 
-        if (moviesRes.status === 'fulfilled' && moviesRes.value.code === 200) {
-          setHotMovies(moviesRes.value.list);
-        } else if (moviesRes.status === 'rejected') {
-          console.error('获取热门电影失败:', moviesRes.reason);
-        }
+          if (moviesData?.code === 200) {
+            setHotMovies(moviesData.list);
+            if (moviesData.list && moviesData.list.length > 0) {
+              setCache('homepage_movies', moviesData.list);
+            }
+          }
+          if (tvShowsData?.code === 200) {
+            setHotTvShows(tvShowsData.list);
+            if (tvShowsData.list && tvShowsData.list.length > 0) {
+              setCache('homepage_tvshows', tvShowsData.list);
+            }
+          }
+          if (varietyShowsData?.code === 200) {
+            setHotVarietyShows(varietyShowsData.list);
+            if (varietyShowsData.list && varietyShowsData.list.length > 0) {
+              setCache('homepage_variety', varietyShowsData.list);
+            }
+          }
+          setBangumiCalendarData(bangumiCalendarData);
+          if (bangumiCalendarData && bangumiCalendarData.length > 0) {
+            setCache('homepage_bangumi', bangumiCalendarData);
+          }
 
-        if (tvShowsRes.status === 'fulfilled' && tvShowsRes.value.code === 200) {
-          setHotTvShows(tvShowsRes.value.list);
-        } else if (tvShowsRes.status === 'rejected') {
-          console.error('获取热门剧集失败:', tvShowsRes.reason);
-        }
+          try {
+            const duanjuResponse = await fetch('/api/duanju/recommends');
+            if (duanjuResponse.ok) {
+              const duanjuResult = await duanjuResponse.json();
+              if (
+                duanjuResult.code === 200 &&
+                duanjuResult.data &&
+                duanjuResult.data.length > 0
+              ) {
+                setHotDuanju(duanjuResult.data);
+                setCache('homepage_duanju', duanjuResult.data);
+              }
+            }
+          } catch (error) {
+            console.error('获取热播短剧数据失败:', error);
+          }
 
-        if (
-          varietyShowsRes.status === 'fulfilled' &&
-          varietyShowsRes.value.code === 200
-        ) {
-          setHotVarietyShows(varietyShowsRes.value.list);
-        } else if (varietyShowsRes.status === 'rejected') {
-          console.error('获取热门综艺失败:', varietyShowsRes.reason);
-        }
+          try {
+            const response = await fetch('/api/tmdb/upcoming');
+            if (response.ok) {
+              const result = await response.json();
+              if (
+                result.code === 200 &&
+                result.data &&
+                result.data.length > 0
+              ) {
+                const sorted = [...result.data].sort((a, b) => {
+                  const dateA = new Date(
+                    a.release_date || '9999-12-31'
+                  ).getTime();
+                  const dateB = new Date(
+                    b.release_date || '9999-12-31'
+                  ).getTime();
+                  return dateA - dateB;
+                });
+                setUpcomingContent(sorted);
+                setCache('homepage_upcoming', sorted);
+              }
+            }
+          } catch (error) {
+            console.error('获取TMDB即将上映数据失败:', error);
+          }
 
-        if (bangumiRes.status === 'fulfilled') {
-          setBangumiCalendarData(bangumiRes.value);
-        } else {
-          console.error('获取番剧日历失败:', bangumiRes.reason);
+          setLoading(false);
+        } catch (error) {
+          console.error('获取推荐数据失败:', error);
+          setLoading(false);
         }
-      } catch (error) {
-        console.error('获取推荐数据失败:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchRecommendData();
+      })();
+    }
   }, []);
-
-  // 处理收藏数据更新的函数
-  const updateFavoriteItems = async (allFavorites: Record<string, any>) => {
-    const allPlayRecords = await getAllPlayRecords();
-
-    // 根据保存时间排序（从近到远）
-    const sorted = Object.entries(allFavorites)
-      .sort(([, a], [, b]) => b.save_time - a.save_time)
-      .map(([key, fav]) => {
-        const plusIndex = key.indexOf('+');
-        const source = key.slice(0, plusIndex);
-        const id = key.slice(plusIndex + 1);
-
-        // 查找对应的播放记录，获取当前集数
-        const playRecord = allPlayRecords[key];
-        const currentEpisode = playRecord?.index;
-
-        return {
-          id,
-          source,
-          title: fav.title,
-          year: fav.year,
-          poster: fav.cover,
-          episodes: fav.total_episodes,
-          source_name: fav.source_name,
-          currentEpisode,
-          search_title: fav?.search_title,
-          origin: fav?.origin,
-        } as FavoriteItem;
-      });
-    setFavoriteItems(sorted);
-  };
-
-  // 当切换到收藏夹时加载收藏数据
-  useEffect(() => {
-    if (activeTab !== 'favorites') return;
-
-    const loadFavorites = async () => {
-      const allFavorites = await getAllFavorites();
-      await updateFavoriteItems(allFavorites);
-    };
-
-    loadFavorites();
-
-    // 监听收藏更新事件
-    const unsubscribe = subscribeToDataUpdates(
-      'favoritesUpdated',
-      (newFavorites: Record<string, any>) => {
-        updateFavoriteItems(newFavorites);
-      }
-    );
-
-    return unsubscribe;
-  }, [activeTab]);
 
   const handleCloseAnnouncement = (announcement: string) => {
     setShowAnnouncement(false);
     localStorage.setItem('hasSeenAnnouncement', announcement); // 记录已查看弹窗
   };
 
+  // 渲染模块的函数
+  const renderModule = (moduleId: string) => {
+    switch (moduleId) {
+      case 'hotMovies':
+        return (
+          <section key='hotMovies' className='mb-8'>
+            <div className='mb-4 flex items-center justify-between'>
+              <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+                热门电影
+              </h2>
+              <Link
+                href='/douban?type=movie'
+                className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              >
+                查看更多
+                <ChevronRight className='w-4 h-4 ml-1' />
+              </Link>
+            </div>
+            <ScrollableRow>
+              {loading
+                ? Array.from({ length: 8 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                    >
+                      <div className='aspect-[2/3] bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse mb-2' />
+                      <div className='h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse w-3/4' />
+                    </div>
+                  ))
+                : hotMovies.map((movie) => (
+                    <div
+                      key={movie.id}
+                      className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                    >
+                      <VideoCard
+                        id={movie.id}
+                        poster={movie.poster}
+                        title={movie.title}
+                        year={movie.year}
+                        rate={movie.rate}
+                        type='movie'
+                        from='douban'
+                        douban_id={movie.id ? parseInt(movie.id) : undefined}
+                      />
+                    </div>
+                  ))}
+            </ScrollableRow>
+          </section>
+        );
+
+      case 'hotDuanju':
+        if (hotDuanju.length === 0) return null;
+        return (
+          <section key='hotDuanju' className='mb-8'>
+            <div className='mb-4 flex items-center justify-between'>
+              <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+                热播短剧
+              </h2>
+              <Link
+                href='/duanju'
+                className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              >
+                查看更多
+                <ChevronRight className='w-4 h-4 ml-1' />
+              </Link>
+            </div>
+            <ScrollableRow>
+              {loading
+                ? Array.from({ length: 8 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                    >
+                      <div className='aspect-[2/3] bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse mb-2' />
+                      <div className='h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse w-3/4' />
+                    </div>
+                  ))
+                : hotDuanju.map((duanju) => (
+                    <div
+                      key={duanju.id + duanju.source}
+                      className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                    >
+                      <VideoCard
+                        id={duanju.id}
+                        source={duanju.source}
+                        poster={duanju.poster}
+                        title={duanju.title}
+                        year={duanju.year}
+                        type='tv'
+                        from='search'
+                        source_name={duanju.source_name}
+                        episodes={duanju.episodes?.length}
+                        douban_id={duanju.douban_id}
+                        cmsData={{
+                          desc: duanju.desc,
+                          episodes: duanju.episodes,
+                          episodes_titles: duanju.episodes_titles,
+                        }}
+                      />
+                    </div>
+                  ))}
+            </ScrollableRow>
+          </section>
+        );
+
+      case 'bangumiCalendar':
+        return (
+          <section key='bangumiCalendar' className='mb-8'>
+            <div className='mb-4 flex items-center justify-between'>
+              <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+                新番放送
+              </h2>
+              <Link
+                href='/douban?type=anime'
+                className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              >
+                查看更多
+                <ChevronRight className='w-4 h-4 ml-1' />
+              </Link>
+            </div>
+            <ScrollableRow>
+              {loading
+                ? Array.from({ length: 8 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                    >
+                      <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
+                        <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
+                      </div>
+                      <div className='mt-2 h-4 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
+                    </div>
+                  ))
+                : (() => {
+                    const today = new Date();
+                    const weekdays = [
+                      'Sun',
+                      'Mon',
+                      'Tue',
+                      'Wed',
+                      'Thu',
+                      'Fri',
+                      'Sat',
+                    ];
+                    const currentWeekday = weekdays[today.getDay()];
+                    const todayAnimes =
+                      bangumiCalendarData
+                        .find((item) => item.weekday.en === currentWeekday)
+                        ?.items.filter((anime) => anime.images) || [];
+
+                    return todayAnimes.map((anime, index) => (
+                      <div
+                        key={`${anime.id}-${index}`}
+                        className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                      >
+                        <VideoCard
+                          from='douban'
+                          title={anime.name_cn || anime.name}
+                          poster={
+                            anime.images?.large ||
+                            anime.images?.common ||
+                            anime.images?.medium ||
+                            anime.images?.small ||
+                            anime.images?.grid ||
+                            ''
+                          }
+                          douban_id={anime.id}
+                          rate={anime.rating?.score?.toFixed(1) || ''}
+                          year={anime.air_date?.split('-')?.[0] || ''}
+                          isBangumi={true}
+                        />
+                      </div>
+                    ));
+                  })()}
+            </ScrollableRow>
+          </section>
+        );
+
+      case 'hotTvShows':
+        return (
+          <section key='hotTvShows' className='mb-8'>
+            <div className='mb-4 flex items-center justify-between'>
+              <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+                热门剧集
+              </h2>
+              <Link
+                href='/douban?type=tv'
+                className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              >
+                查看更多
+                <ChevronRight className='w-4 h-4 ml-1' />
+              </Link>
+            </div>
+            <ScrollableRow>
+              {loading
+                ? Array.from({ length: 8 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                    >
+                      <div className='aspect-[2/3] bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse mb-2' />
+                      <div className='h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse w-3/4' />
+                    </div>
+                  ))
+                : hotTvShows.map((tvShow) => (
+                    <div
+                      key={tvShow.id}
+                      className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                    >
+                      <VideoCard
+                        id={tvShow.id}
+                        poster={tvShow.poster}
+                        title={tvShow.title}
+                        year={tvShow.year}
+                        rate={tvShow.rate}
+                        type='tv'
+                        from='douban'
+                        douban_id={tvShow.id ? parseInt(tvShow.id) : undefined}
+                      />
+                    </div>
+                  ))}
+            </ScrollableRow>
+          </section>
+        );
+
+      case 'hotVarietyShows':
+        return (
+          <section key='hotVarietyShows' className='mb-8'>
+            <div className='mb-4 flex items-center justify-between'>
+              <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+                热门综艺
+              </h2>
+              <Link
+                href='/douban?type=show'
+                className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              >
+                查看更多
+                <ChevronRight className='w-4 h-4 ml-1' />
+              </Link>
+            </div>
+            <ScrollableRow>
+              {loading
+                ? Array.from({ length: 8 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                    >
+                      <div className='aspect-[2/3] bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse mb-2' />
+                      <div className='h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse w-3/4' />
+                    </div>
+                  ))
+                : hotVarietyShows.map((varietyShow) => (
+                    <div
+                      key={varietyShow.id}
+                      className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                    >
+                      <VideoCard
+                        id={varietyShow.id}
+                        poster={varietyShow.poster}
+                        title={varietyShow.title}
+                        year={varietyShow.year}
+                        rate={varietyShow.rate}
+                        type='tv'
+                        from='douban'
+                        douban_id={
+                          varietyShow.id ? parseInt(varietyShow.id) : undefined
+                        }
+                      />
+                    </div>
+                  ))}
+            </ScrollableRow>
+          </section>
+        );
+
+      case 'upcomingContent':
+        if (upcomingContent.length === 0) return null;
+        return (
+          <section key='upcomingContent' className='mb-8'>
+            <div className='mb-4 flex items-center justify-between'>
+              <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+                即将上映
+              </h2>
+            </div>
+            <ScrollableRow>
+              {upcomingContent.map((item) => (
+                <div
+                  key={`${item.media_type}-${item.id}`}
+                  className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                >
+                  <VideoCard
+                    title={item.title}
+                    poster={processImageUrl(getTMDBImageUrl(item.poster_path))}
+                    year={item.release_date?.split('-')?.[0] || ''}
+                    rate={
+                      item.vote_average && item.vote_average > 0
+                        ? item.vote_average.toFixed(1)
+                        : ''
+                    }
+                    type={item.media_type === 'tv' ? 'tv' : 'movie'}
+                    from='douban'
+                    tmdb_id={item.id}
+                    releaseDate={item.release_date}
+                    isUpcoming={true}
+                  />
+                </div>
+              ))}
+            </ScrollableRow>
+          </section>
+        );
+
+      default:
+        return null;
+    }
+  };
+
   return (
     <PageLayout>
-      <div className='px-2 sm:px-10 py-4 sm:py-8 overflow-visible'>
-        {/* 顶部 Tab 切换 */}
-        <div className='mb-8 flex justify-center'>
-          <CapsuleSwitch
-            options={[
-              { label: '首页', value: 'home' },
-              { label: '收藏夹', value: 'favorites' },
-            ]}
-            active={activeTab}
-            onChange={(value) => setActiveTab(value as 'home' | 'favorites')}
-          />
+      <FireworksCanvas />
+      {/* TMDB 热门轮播图 */}
+      {homeBannerEnabled && (
+        <div className='w-full mb-4'>
+          <BannerCarousel delayLoad={true} />
         </div>
+      )}
 
+      <div className='px-2 sm:px-10 pb-4 sm:pb-8 overflow-visible'>
         <div className='max-w-[95%] mx-auto'>
-          {activeTab === 'favorites' ? (
-            // 收藏夹视图
-            <section className='mb-8'>
-              <div className='mb-4 flex items-center justify-between'>
-                <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-                  我的收藏
-                </h2>
-                {favoriteItems.length > 0 && (
+          {/* 首页内容 */}
+          <>
+            {/* 源站寻片和AI问片入口 */}
+            <div
+              className={`flex items-center justify-end gap-2 mb-4 ${
+                homeBannerEnabled ? '' : 'mt-[30px]'
+              }`}
+            >
+              <button
+                onClick={handleDirectPlay}
+                className='p-1.5 rounded-lg text-blue-500 hover:text-blue-600 transition-colors'
+                title='直链播放'
+              >
+                <LinkIcon size={18} />
+              </button>
+
+              {musicEnabled && (
+                <Link href='/music' prefetch={false}>
                   <button
-                    className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-                    onClick={async () => {
-                      await clearAllFavorites();
-                      setFavoriteItems([]);
-                    }}
+                    className='p-1.5 rounded-lg text-green-500 hover:text-green-600 transition-colors'
+                    title='音乐视听'
                   >
-                    清空
+                    <Music size={18} />
                   </button>
-                )}
-              </div>
-              <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'>
-                {favoriteItems.map((item) => (
-                  <div key={item.id + item.source} className='w-full'>
-                    <VideoCard
-                      query={item.search_title}
-                      {...item}
-                      from='favorite'
-                      type={item.episodes > 1 ? 'tv' : ''}
-                    />
-                  </div>
-                ))}
-                {favoriteItems.length === 0 && (
-                  <div className='col-span-full text-center text-gray-500 py-8 dark:text-gray-400'>
-                    暂无收藏内容
-                  </div>
-                )}
-              </div>
-            </section>
-          ) : (
-            // 首页视图
-            <>
-              {/* 继续观看 */}
-              <ContinueWatching />
+                </Link>
+              )}
 
-              {/* 热门电影 */}
-              <section className='mb-8'>
-                <div className='mb-4 flex items-center justify-between'>
-                  <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-                    热门电影
-                  </h2>
-                  <Link
-                    href='/douban?type=movie'
-                    className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              {mangaEnabled && (
+                <Link href='/manga' prefetch={false}>
+                  <button
+                    className='p-1.5 rounded-lg text-emerald-500 hover:text-emerald-600 transition-colors'
+                    title='漫画展馆'
                   >
-                    查看更多
-                    <ChevronRight className='w-4 h-4 ml-1' />
-                  </Link>
-                </div>
-                <ScrollableRow>
-                  {loading
-                    ? // 加载状态显示灰色占位数据
-                    Array.from({ length: 8 }).map((_, index) => (
-                      <div
-                        key={index}
-                        className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
-                      >
-                        <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
-                          <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
-                        </div>
-                        <div className='mt-2 h-4 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
-                      </div>
-                    ))
-                    : // 显示真实数据
-                    hotMovies.map((movie, index) => (
-                      <div
-                        key={index}
-                        className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
-                      >
-                        <VideoCard
-                          from='douban'
-                          title={movie.title}
-                          poster={movie.poster}
-                          douban_id={Number(movie.id)}
-                          rate={movie.rate}
-                          year={movie.year}
-                          type='movie'
-                        />
-                      </div>
-                    ))}
-                </ScrollableRow>
-              </section>
+                    <BookOpen size={18} />
+                  </button>
+                </Link>
+              )}
 
-              {/* 热门剧集 */}
-              <section className='mb-8'>
-                <div className='mb-4 flex items-center justify-between'>
-                  <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-                    热门剧集
-                  </h2>
-                  <Link
-                    href='/douban?type=tv'
-                    className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              {booksEnabled && (
+                <Link href='/books' prefetch={false}>
+                  <button
+                    className='p-1.5 rounded-lg text-amber-500 hover:text-amber-600 transition-colors'
+                    title='电子书馆'
                   >
-                    查看更多
-                    <ChevronRight className='w-4 h-4 ml-1' />
-                  </Link>
-                </div>
-                <ScrollableRow>
-                  {loading
-                    ? // 加载状态显示灰色占位数据
-                    Array.from({ length: 8 }).map((_, index) => (
-                      <div
-                        key={index}
-                        className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
-                      >
-                        <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
-                          <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
-                        </div>
-                        <div className='mt-2 h-4 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
-                      </div>
-                    ))
-                    : // 显示真实数据
-                    hotTvShows.map((show, index) => (
-                      <div
-                        key={index}
-                        className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
-                      >
-                        <VideoCard
-                          from='douban'
-                          title={show.title}
-                          poster={show.poster}
-                          douban_id={Number(show.id)}
-                          rate={show.rate}
-                          year={show.year}
-                        />
-                      </div>
-                    ))}
-                </ScrollableRow>
-              </section>
+                    <BookMarked size={18} />
+                  </button>
+                </Link>
+              )}
 
-              {/* 每日新番放送 */}
-              <section className='mb-8'>
-                <div className='mb-4 flex items-center justify-between'>
-                  <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-                    新番放送
-                  </h2>
-                  <Link
-                    href='/douban?type=anime'
-                    className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              {/* 源站寻片入口 */}
+              {sourceSearchEnabled && (
+                <Link href='/source-search'>
+                  <button
+                    className='p-2 rounded-lg text-blue-500 hover:text-blue-600 transition-colors'
+                    title='源站寻片'
                   >
-                    查看更多
-                    <ChevronRight className='w-4 h-4 ml-1' />
-                  </Link>
-                </div>
-                <ScrollableRow>
-                  {loading
-                    ? // 加载状态显示灰色占位数据
-                    Array.from({ length: 8 }).map((_, index) => (
-                      <div
-                        key={index}
-                        className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
-                      >
-                        <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
-                          <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
-                        </div>
-                        <div className='mt-2 h-4 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
-                      </div>
-                    ))
-                    : // 展示当前日期的番剧
-                    (() => {
-                      // 获取当前日期对应的星期
-                      const today = new Date();
-                      const weekdays = [
-                        'Sun',
-                        'Mon',
-                        'Tue',
-                        'Wed',
-                        'Thu',
-                        'Fri',
-                        'Sat',
-                      ];
-                      const currentWeekday = weekdays[today.getDay()];
+                    <ListVideo size={20} />
+                  </button>
+                </Link>
+              )}
 
-                      // 找到当前星期对应的番剧数据
-                      const todayAnimes =
-                        bangumiCalendarData.find(
-                          (item) => item.weekday.en === currentWeekday
-                        )?.items || [];
+              {/* AI问片入口 */}
+              {aiEnabled && (
+                <button
+                  onClick={() => setShowAIChat(true)}
+                  className='p-2 rounded-lg text-purple-500 hover:text-purple-600 transition-colors'
+                  title='AI问片'
+                >
+                  <Bot size={20} />
+                </button>
+              )}
+            </div>
 
-                      return todayAnimes.map((anime, index) => (
-                        <div
-                          key={`${anime.id}-${index}`}
-                          className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
-                        >
-                          <VideoCard
-                            from='douban'
-                            title={anime.name_cn || anime.name}
-                            poster={
-                              anime.images.large ||
-                              anime.images.common ||
-                              anime.images.medium ||
-                              anime.images.small ||
-                              anime.images.grid
-                            }
-                            douban_id={anime.id}
-                            rate={anime.rating?.score?.toFixed(1) || ''}
-                            year={anime.air_date?.split('-')?.[0] || ''}
-                            isBangumi={true}
-                          />
-                        </div>
-                      ));
-                    })()}
-                </ScrollableRow>
-              </section>
+            {/* 继续观看 */}
+            {homeContinueWatchingEnabled && <ContinueWatching />}
 
-              {/* 热门综艺 */}
-              <section className='mb-8'>
-                <div className='mb-4 flex items-center justify-between'>
-                  <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-                    热门综艺
-                  </h2>
-                  <Link
-                    href='/douban?type=show'
-                    className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-                  >
-                    查看更多
-                    <ChevronRight className='w-4 h-4 ml-1' />
-                  </Link>
-                </div>
-                <ScrollableRow>
-                  {loading
-                    ? // 加载状态显示灰色占位数据
-                    Array.from({ length: 8 }).map((_, index) => (
-                      <div
-                        key={index}
-                        className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
-                      >
-                        <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
-                          <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
-                        </div>
-                        <div className='mt-2 h-4 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
-                      </div>
-                    ))
-                    : // 显示真实数据
-                    hotVarietyShows.map((show, index) => (
-                      <div
-                        key={index}
-                        className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
-                      >
-                        <VideoCard
-                          from='douban'
-                          title={show.title}
-                          poster={show.poster}
-                          douban_id={Number(show.id)}
-                          rate={show.rate}
-                          year={show.year}
-                        />
-                      </div>
-                    ))}
-                </ScrollableRow>
-              </section>
-            </>
-          )}
+            {/* 根据配置动态渲染首页模块 */}
+            {homeModules
+              .filter((module) => module.enabled)
+              .sort((a, b) => a.order - b.order)
+              .map((module) => renderModule(module.id))}
+          </>
         </div>
       </div>
-      {announcement && showAnnouncement && (
-        <div
-          className={`fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm dark:bg-black/70 p-4 transition-opacity duration-300 ${showAnnouncement ? '' : 'opacity-0 pointer-events-none'
-            }`}
-          onTouchStart={(e) => {
-            // 如果点击的是背景区域，阻止触摸事件冒泡，防止背景滚动
-            if (e.target === e.currentTarget) {
-              e.preventDefault();
-            }
-          }}
-          onTouchMove={(e) => {
-            // 如果触摸的是背景区域，阻止触摸移动，防止背景滚动
-            if (e.target === e.currentTarget) {
-              e.preventDefault();
-              e.stopPropagation();
-            }
-          }}
-          onTouchEnd={(e) => {
-            // 如果触摸的是背景区域，阻止触摸结束事件，防止背景滚动
-            if (e.target === e.currentTarget) {
-              e.preventDefault();
-            }
-          }}
-          style={{
-            touchAction: 'none', // 禁用所有触摸操作
-          }}
-        >
-          <div
-            className='w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-gray-900 transform transition-all duration-300 hover:shadow-2xl'
-            onTouchMove={(e) => {
-              // 允许公告内容区域正常滚动，阻止事件冒泡到外层
-              e.stopPropagation();
-            }}
-            style={{
-              touchAction: 'auto', // 允许内容区域的正常触摸操作
-            }}
-          >
-            <div className='flex justify-between items-start mb-4'>
-              <h3 className='text-2xl font-bold tracking-tight text-gray-800 dark:text-white border-b border-green-500 pb-1'>
-                提示
-              </h3>
-              <button
-                onClick={() => handleCloseAnnouncement(announcement)}
-                className='text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-white transition-colors'
-                aria-label='关闭'
-              ></button>
-            </div>
-            <div className='mb-6'>
-              <div className='relative overflow-hidden rounded-lg mb-4 bg-green-50 dark:bg-green-900/20'>
-                <div className='absolute inset-y-0 left-0 w-1.5 bg-green-500 dark:bg-green-400'></div>
-                <p className='ml-4 text-gray-600 dark:text-gray-300 leading-relaxed'>
-                  {announcement}
-                </p>
-              </div>
+
+      {/* HTTP 环境警告弹窗 */}
+      {showHttpWarning && (
+        <HttpWarningDialog onClose={() => setShowHttpWarning(false)} />
+      )}
+
+      {/* AI问片面板 */}
+      {aiEnabled && (
+        <AIChatPanel
+          isOpen={showAIChat}
+          onClose={() => setShowAIChat(false)}
+          welcomeMessage={aiDefaultMessageNoVideo}
+        />
+      )}
+
+      {/* 公告弹窗 */}
+      {showAnnouncement && (
+        <div className='fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4'>
+          <div className='bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6'>
+            <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3'>
+              公告
+            </h3>
+            <div className='text-gray-700 dark:text-gray-300 mb-4 whitespace-pre-wrap'>
+              {announcement}
             </div>
             <button
-              onClick={() => handleCloseAnnouncement(announcement)}
-              className='w-full rounded-lg bg-gradient-to-r from-green-600 to-green-700 px-4 py-3 text-white font-medium shadow-md hover:shadow-lg hover:from-green-700 hover:to-green-800 dark:from-green-600 dark:to-green-700 dark:hover:from-green-700 dark:hover:to-green-800 transition-all duration-300 transform hover:-translate-y-0.5'
+              onClick={() => handleCloseAnnouncement(announcement || '')}
+              className='w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors'
             >
-              我知道了
+              知道了
             </button>
           </div>
         </div>
       )}
+
+      {showDirectPlayDialog && (
+        <div
+          className='fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4'
+          onClick={() => setShowDirectPlayDialog(false)}
+        >
+          <div
+            className='bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg'
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className='flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700'>
+              <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+                直链播放
+              </h3>
+              <button
+                onClick={() => setShowDirectPlayDialog(false)}
+                className='p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors'
+                aria-label='关闭'
+              >
+                <span className='text-gray-600 dark:text-gray-400'>×</span>
+              </button>
+            </div>
+            <div className='p-4 space-y-4'>
+              <div className='text-sm text-gray-600 dark:text-gray-300'>
+                请输入可直接播放的视频链接。
+              </div>
+              {netdiskTempPlayEnabled && (
+                <div className='text-xs text-gray-500 dark:text-gray-400'>
+                  支持夸克、UC、百度、天翼、移动、123、115 网盘在线播放。
+                </div>
+              )}
+              <input
+                value={directPlayUrl}
+                onChange={(event) => setDirectPlayUrl(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    submitDirectPlay();
+                  }
+                }}
+                placeholder='https://example.com/video.m3u8'
+                className='w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500'
+              />
+              <div className='flex justify-end gap-2'>
+                <button
+                  onClick={() => setShowDirectPlayDialog(false)}
+                  className='px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors'
+                >
+                  取消
+                </button>
+                <button
+                  onClick={submitDirectPlay}
+                  disabled={!directPlayUrl.trim() || directPlaySubmitting}
+                  className='px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+                >
+                  {directPlaySubmitting ? '处理中...' : '开始播放'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && <Toast {...toast} />}
     </PageLayout>
   );
 }

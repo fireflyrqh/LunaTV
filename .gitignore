@@ -9,6 +9,7 @@
 /coverage
 
 # next.js
+.next
 /.next/
 /out/
 
@@ -32,6 +33,14 @@ yarn-error.log*
 # vercel
 .vercel
 
+# cloudflare
+.open-next/
+
+# edgeone
+.edgeone/
+.wrangler/
+wrangler.toml.bak
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
@@ -43,9 +52,26 @@ sitemap-*.xml
 # generated files
 src/lib/runtime.ts
 public/manifest.json
+public/libbitsub/
 
-# next-pwa 构建产物
+# PWA files
 public/sw.js
 public/sw.js.map
 public/workbox-*.js
 public/workbox-*.js.map
+
+/.claude
+/.codex
+/.vscode
+# SQLite 开发数据库
+.data/
+*.db
+*.db-shm
+*.db-wal
+
+# local scripts
+scripts/tvbox/
+scripts/test
+
+.agents/
+skills-lock.json

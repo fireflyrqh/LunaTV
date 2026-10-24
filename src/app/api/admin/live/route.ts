@@ -11,22 +11,19 @@ export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
-    // 权限检查
+    // 权限检查 - 使用v2用户系统
     const authInfo = getAuthInfoFromCookie(request);
     const username = authInfo?.username;
     const config = await getConfig();
     if (username !== process.env.USERNAME) {
-      // 管理员
-      const user = config.UserConfig.Users.find(
-        (u) => u.username === username
-      );
-      if (!user || user.role !== 'admin' || user.banned) {
+      const userInfo = await db.getUserInfoV2(username || '');
+      if (!userInfo || userInfo.role !== 'admin' || userInfo.banned) {
         return NextResponse.json({ error: '权限不足' }, { status: 401 });
       }
     }
 
     const body = await request.json();
-    const { action, key, name, url, ua, epg } = body;
+    const { action, key, name, url, ua, epg, proxyMode } = body;
 
     if (!config) {
       return NextResponse.json({ error: '配置不存在' }, { status: 404 });
@@ -154,6 +151,18 @@ export async function POST(request: NextRequest) {
         });
 
         config.LiveConfig = sortedLiveConfig;
+        break;
+
+      case 'set_proxy_mode':
+        // 设置代理模式
+        const setProxySource = config.LiveConfig.find((l) => l.key === key);
+        if (!setProxySource) {
+          return NextResponse.json({ error: '直播源不存在' }, { status: 404 });
+        }
+        if (!proxyMode || !['full', 'm3u8-only', 'direct'].includes(proxyMode)) {
+          return NextResponse.json({ error: '无效的代理模式' }, { status: 400 });
+        }
+        setProxySource.proxyMode = proxyMode as 'full' | 'm3u8-only' | 'direct';
         break;
 
       default:

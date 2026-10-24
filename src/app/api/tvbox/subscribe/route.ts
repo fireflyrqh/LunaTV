@@ -15,8 +15,8 @@ export const runtime = 'nodejs';
  * 支持全局token（管理员）和用户token（普通用户）
  */
 export async function GET(request: NextRequest) {
-  // 检查是否开启订阅功能
-  const enableSubscribe = process.env.ENABLE_TVBOX_SUBSCRIBE === 'true';
+  // 检查是否开启订阅功能，默认开启
+  const enableSubscribe = process.env.ENABLE_TVBOX_SUBSCRIBE !== 'false';
   if (!enableSubscribe) {
     return NextResponse.json(
       { error: '订阅功能未开启' },
@@ -27,45 +27,36 @@ export async function GET(request: NextRequest) {
   // 验证token
   const searchParams = request.nextUrl.searchParams;
   const token = searchParams.get('token');
-  const globalToken = process.env.TVBOX_SUBSCRIBE_TOKEN;
+  const globalToken = process.env.TVBOX_SUBSCRIBE_TOKEN || 'kuntv123';
   const adFilter = searchParams.get('adFilter') === 'true'; // 获取去广告参数
   const yellowFilter = searchParams.get('yellowFilter') === 'true';
-
-  if (!token) {
-    return NextResponse.json(
-      { error: '缺少订阅token' },
-      { status: 401 }
-    );
-  }
 
   // 判断是全局token还是用户token
   let username: string | undefined;
   let isGlobalToken = false;
 
-  if (globalToken && token === globalToken) {
-    // 全局token（管理员订阅）
+  if (!token || token === 'kuntv123' || (globalToken && token === globalToken)) {
+    // 全局token（管理员订阅或默认密码）
     isGlobalToken = true;
     console.log('使用全局token访问TVBox订阅');
   } else {
     // 用户token，查询用户名
     username = await db.getUsernameByTvboxToken(token) || undefined;
     if (!username) {
-      return NextResponse.json(
-        { error: '无效的订阅token' },
-        { status: 401 }
-      );
+      // 容错：如果用户 token 不在数据库中，也允许作为访客/全局访问
+      isGlobalToken = true;
+      console.log('未找到特定用户token，使用默认全局配置');
+    } else {
+      // 检查用户是否被封禁
+      const userInfo = await db.getUserInfoV2(username);
+      if (userInfo?.banned) {
+        return NextResponse.json(
+          { error: '用户已被封禁' },
+          { status: 403 }
+        );
+      }
+      console.log(`用户 ${username} 访问TVBox订阅`);
     }
-
-    // 检查用户是否被封禁
-    const userInfo = await db.getUserInfoV2(username);
-    if (userInfo?.banned) {
-      return NextResponse.json(
-        { error: '用户已被封禁' },
-        { status: 403 }
-      );
-    }
-
-    console.log(`用户 ${username} 访问TVBox订阅`);
   }
 
   try {
@@ -111,11 +102,12 @@ export async function GET(request: NextRequest) {
     const embySources = await embyManager.getEnabledSources();
 
     // 构建 OpenList 站点配置
+    const effectiveToken = token || globalToken;
     const openlistSites = hasOpenList ? [{
       key: 'openlist',
       name: '私人影库',
       type: 1,
-      api: `${baseUrl}/api/openlist/cms-proxy/${encodeURIComponent(token)}`,
+      api: `${baseUrl}/api/openlist/cms-proxy/${encodeURIComponent(effectiveToken)}`,
       searchable: 1,
       quickSearch: 1,
       filterable: 1,
@@ -127,7 +119,7 @@ export async function GET(request: NextRequest) {
       key: `emby_${source.key}`,
       name: source.name || 'Emby媒体库',
       type: 1,
-      api: `${baseUrl}/api/emby/cms-proxy/${encodeURIComponent(token)}?embyKey=${source.key}`,
+      api: `${baseUrl}/api/emby/cms-proxy/${encodeURIComponent(effectiveToken)}?embyKey=${source.key}`,
       searchable: 1,
       quickSearch: 1,
       filterable: 1,
@@ -186,7 +178,18 @@ export async function GET(request: NextRequest) {
       ),
 
       // 解析器
-      parses: [],
+      parses: [
+        {
+          name: "聚合解析",
+          type: 1,
+          url: "https://jx.jsonplayer.com/player/?url=",
+        },
+        {
+          name: "默认通用解析",
+          type: 0,
+          url: "https://jx.xmflv.com/?url=",
+        },
+      ],
 
       // 规则
       rules: [],

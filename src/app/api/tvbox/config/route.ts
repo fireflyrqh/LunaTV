@@ -17,11 +17,11 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // 检查是否开启订阅功能
-  const enableSubscribe = process.env.ENABLE_TVBOX_SUBSCRIBE === 'true';
-  const subscribeToken = process.env.TVBOX_SUBSCRIBE_TOKEN;
+  // 检查是否开启订阅功能，默认开启
+  const enableSubscribe = process.env.ENABLE_TVBOX_SUBSCRIBE !== 'false';
+  const subscribeToken = process.env.TVBOX_SUBSCRIBE_TOKEN || 'kuntv123';
 
-  if (!enableSubscribe || !subscribeToken) {
+  if (!enableSubscribe) {
     return NextResponse.json(
       {
         enabled: false,

@@ -404,6 +404,58 @@ async function getInitConfig(
     });
   });
 
+  // 如果没有配置任何视频源，补充内置的高速精选采集源
+  if (adminConfig.SourceConfig.length === 0) {
+    const defaultSites = [
+      {
+        key: 'jszy',
+        name: '极速资源',
+        api: 'https://jszyapi.com/api.php/provide/vod/',
+        detail: 'https://jszyapi.com/api.php/provide/vod/',
+      },
+      {
+        key: 'lzzy',
+        name: '量子资源',
+        api: 'https://cj.lziapi.com/api.php/provide/vod/',
+        detail: 'https://cj.lziapi.com/api.php/provide/vod/',
+      },
+      {
+        key: 'bfzy',
+        name: '暴风资源',
+        api: 'https://bfzyapi.com/api.php/provide/vod/',
+        detail: 'https://bfzyapi.com/api.php/provide/vod/',
+      },
+      {
+        key: 'ikun',
+        name: 'iKun资源',
+        api: 'https://ikunzyapi.com/api.php/provide/vod',
+        detail: 'https://ikunzyapi.com/api.php/provide/vod',
+      },
+      {
+        key: 'snzy',
+        name: '索尼资源',
+        api: 'https://suoniapi.com/api.php/provide/vod/',
+        detail: 'https://suoniapi.com/api.php/provide/vod/',
+      },
+      {
+        key: 'ffzy',
+        name: '非凡资源',
+        api: 'http://api.ffzyapi.com/api.php/provide/vod/',
+        detail: 'http://api.ffzyapi.com/api.php/provide/vod/',
+      },
+    ];
+    defaultSites.forEach((site) => {
+      adminConfig.SourceConfig.push({
+        key: site.key,
+        name: site.name,
+        api: site.api,
+        detail: site.detail,
+        from: 'config',
+        disabled: false,
+      });
+    });
+  }
+
   // 从配置文件中补充自定义分类信息
   cfgFile.custom_category?.forEach((category) => {
     adminConfig.CustomCategories.push({
@@ -431,6 +483,20 @@ async function getInitConfig(
       disabled: false,
     });
   });
+
+  // 如果没有配置直播源，补充默认央视卫视直播
+  if (!adminConfig.LiveConfig || adminConfig.LiveConfig.length === 0) {
+    adminConfig.LiveConfig = [
+      {
+        key: 'cctv_live',
+        name: '央视卫视频道',
+        url: 'https://cdn.jsdelivr.net/gh/Guovin/iptv-api@gd/output/result.m3u',
+        channelNumber: 0,
+        from: 'config',
+        disabled: false,
+      },
+    ];
+  }
 
   return adminConfig;
 }

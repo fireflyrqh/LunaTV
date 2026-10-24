@@ -172,12 +172,32 @@ function shouldSkipAuth(pathname: string): boolean {
     '/favicon.ico',
     '/robots.txt',
     '/manifest.json',
-    '/icons/',
+    '/icons',
     '/logo.png',
     '/screenshot.png',
+    '/login',
+    '/register',
+    '/oidc-register',
+    '/qr-login',
+    '/warning',
+    '/tv/login',
+    '/tvbox',
+    '/api/login',
+    '/api/register',
+    '/api/logout',
+    '/api/auth',
+    '/api/telegram',
+    '/api/cron',
+    '/api/server-config',
+    '/api/proxy-m3u8',
+    '/api/cms-proxy',
+    '/api/tvbox',
+    '/api/theme',
+    '/api/openlist',
+    '/api/emby',
   ];
 
-  return skipPaths.some((path) => pathname.startsWith(path));
+  return skipPaths.some((path) => pathname === path || pathname.startsWith(path + '/') || pathname.startsWith(path + '?'));
 }
 
 function isTVModePath(pathname: string): boolean {

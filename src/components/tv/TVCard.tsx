@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { Play, Star } from 'lucide-react';
 
 import { processImageUrl } from '@/lib/utils';
 

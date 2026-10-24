@@ -29,28 +29,28 @@ export default async function TVLoginPage({
 
   return (
     <TVLayout showNav={false}>
-      <section className='mx-auto grid max-w-6xl grid-cols-[1fr_430px] gap-10 rounded-[42px] border border-white/10 bg-slate-950/75 p-12 shadow-2xl shadow-black/60'>
-        <div className='flex flex-col justify-center'>
-          <div className='inline-flex w-fit items-center gap-3 rounded-full bg-rose-600 px-5 py-2 text-xl font-bold text-white'>
-            📱 手机确认 · 电视自动登录
+      <section style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', maxWidth: '960px', margin: '20px auto 0 auto', padding: '32px 40px', borderRadius: '32px', backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(255, 255, 255, 0.15)', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)' }}>
+        <div style={{ flex: 1, paddingRight: '40px' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '9999px', backgroundColor: '#e11d48', padding: '6px 18px', fontSize: '18px', fontWeight: 'bold', color: '#ffffff' }}>
+            📱 手机扫码 · 电视自动登录
           </div>
-          <h1 className='mt-7 text-7xl font-black tracking-tight'>扫码登录</h1>
-          <p className='mt-6 max-w-2xl text-3xl leading-relaxed text-slate-300'>
-            用已登录的手机浏览器扫描右侧二维码，在手机上确认后，电视端会自动进入。
+          <h1 style={{ marginTop: '20px', fontSize: '46px', fontWeight: 900, letterSpacing: '-0.025em', color: '#ffffff', lineHeight: 1.2 }}>扫码登录</h1>
+          <p style={{ marginTop: '16px', fontSize: '20px', lineHeight: 1.6, color: '#94a3b8' }}>
+            用已登录的手机浏览器扫描右侧二维码，在手机上点击确认后，电视将自动登录进入。
           </p>
-          <p id='qr-status-text' className='mt-8 text-2xl font-bold text-rose-300'>
-            请使用手机扫码登录
+          <p id='qr-status-text' style={{ marginTop: '24px', fontSize: '22px', fontWeight: 'bold', color: '#fda4af' }}>
+            请使用手机扫码
           </p>
         </div>
-        <div className='rounded-[36px] border border-white/10 bg-white p-7 text-center text-black shadow-2xl shadow-black/60'>
+        <div style={{ width: '270px', flexShrink: 0, borderRadius: '24px', backgroundColor: '#ffffff', padding: '16px', textAlign: 'center', color: '#000000', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)' }}>
           {qrImg ? (
-            <img src={qrImg} alt='扫码登录二维码' className='mx-auto h-[360px] w-[360px]' />
+            <img src={qrImg} alt='扫码登录二维码' style={{ width: '238px', height: '238px', margin: '0 auto', display: 'block' }} />
           ) : (
-            <div className='flex h-[360px] items-center justify-center text-2xl font-bold text-red-500'>
+            <div style={{ height: '238px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 'bold', color: '#ef4444' }}>
               生成二维码失败，请刷新
             </div>
           )}
-          <div id='qr-countdown' className='mt-5 text-2xl font-black'>剩余 120 秒</div>
+          <div id='qr-countdown' style={{ marginTop: '12px', fontSize: '17px', fontWeight: 900, color: '#334155' }}>剩余 120 秒</div>
         </div>
       </section>
 

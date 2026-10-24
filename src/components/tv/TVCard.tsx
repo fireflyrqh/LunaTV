@@ -1,24 +1,21 @@
 'use client';
 
-import { Play, Star } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 import { processImageUrl } from '@/lib/utils';
 
 import { TVItem } from './types';
 
 export default function TVCard({ item }: { item: TVItem }) {
-  const router = useRouter();
   const poster = item.poster ? processImageUrl(item.poster) : '';
   const playUrl = item.href || `/tv/detail?title=${encodeURIComponent(item.title)}${
     item.year ? `&year=${encodeURIComponent(item.year)}` : ''
   }${item.type ? `&stype=${item.type}` : ''}`;
 
   return (
-    <button
-      type='button'
-      onClick={() => router.push(playUrl)}
-      className='group w-[210px] shrink-0 cursor-pointer rounded-[28px] bg-white/[0.04] p-3 text-left outline-none transition duration-200 hover:bg-white/10 focus-visible:bg-white/10 tv-focusable'
+    <Link
+      href={playUrl}
+      className='group w-[210px] shrink-0 cursor-pointer rounded-[28px] bg-white/[0.04] p-3 text-left outline-none transition duration-200 hover:bg-white/10 focus-visible:bg-white/10 tv-focusable block'
     >
       <div className='relative aspect-[2/3] overflow-hidden rounded-[22px] bg-slate-900 shadow-xl shadow-black/50 transition duration-200 group-hover:scale-[1.03] group-focus-visible:scale-[1.03]'>
         {poster ? (
@@ -37,6 +34,6 @@ export default function TVCard({ item }: { item: TVItem }) {
       </div>
       <h3 className='mt-3 line-clamp-1 text-[22px] font-bold text-white'>{item.title}</h3>
       <p className='mt-1 text-lg text-slate-400'>{item.year || '即刻播放'}</p>
-    </button>
+    </Link>
   );
 }

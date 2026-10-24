@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 function loadLocalEnvFile() {
@@ -641,54 +641,6 @@ function patchSsrNodeHandlerStatus() {
   console.warn('[edgeone-build] ssr-node handler not found, skip status patch');
 }
 
-async function patchClientChunksForOldBrowsers() {
-  let esbuild;
-  try {
-    const mod = await import('esbuild');
-    esbuild = mod.default || mod;
-  } catch (e) {
-    console.warn('[edgeone-build] esbuild not available, skipping downlevel:', e.message);
-    return;
-  }
-
-  const dirsToSearch = [
-    join(process.cwd(), '.edgeone'),
-    join(process.cwd(), '.next'),
-  ];
-
-  function processFile(full) {
-    if (!full.endsWith('.js') && !full.endsWith('.mjs')) return;
-    try {
-      const code = readFileSync(full, 'utf8');
-      const res = esbuild.transformSync(code, { target: 'chrome56' });
-      if (res && res.code && res.code !== code) {
-        writeFileSync(full, res.code);
-        console.log(`[edgeone-build] Downleveled JS for Chrome 56 (Android TV): ${full}`);
-      }
-    } catch (_) {}
-  }
-
-  function walk(dir) {
-    if (!existsSync(dir)) return;
-    try {
-      for (const entry of readdirSync(dir)) {
-        const full = join(dir, entry);
-        try {
-          if (statSync(full).isDirectory()) {
-            walk(full);
-          } else {
-            processFile(full);
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
-  }
-
-  for (const d of dirsToSearch) {
-    walk(d);
-  }
-}
-
 const isInsideEdgeOneBuilder = process.env.NEXT_PRIVATE_STANDALONE === 'true';
 
 const command = isInsideEdgeOneBuilder
@@ -705,7 +657,7 @@ const child = spawn(command, {
   },
 });
 
-child.on('exit', async (code, signal) => {
+child.on('exit', (code, signal) => {
   if (!signal && code === 0) {
     for (const file of ['edgeone.json', 'package.json']) {
       copyFileSync(join(process.cwd(), file), join(process.cwd(), '.edgeone', file));
@@ -715,7 +667,6 @@ child.on('exit', async (code, signal) => {
     patchEdgeFunctionMiddlewareConfig();
     patchSsrNodeRoutes();
     patchSsrNodeHandlerStatus();
-    await patchClientChunksForOldBrowsers();
 
     for (const envPath of [
       join(process.cwd(), '.edgeone', '.env'),
